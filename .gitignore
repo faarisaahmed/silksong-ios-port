@@ -1,0 +1,10 @@
+/work/
+/output/
+.DS_Store
+bin/
+obj/
+/BepInEx/plugins/*
+/BepInEx/patchers/*
+/BepInEx/config/*
+/BepInEx/missing-hooks.txt
+!/BepInEx/*/.gitkeep

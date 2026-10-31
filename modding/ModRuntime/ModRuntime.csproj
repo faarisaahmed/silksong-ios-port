@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Runs inside the iOS app (compiled to native code by IL2CPP with the game). -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>IOSPort.ModRuntime</AssemblyName>
+    <RootNamespace>IOSPort.Mods</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <DebugType>none</DebugType>
+    <NoWarn>MSB3277;CS1701;CS1702</NoWarn>
+    <UnityManaged Condition="'$(UnityManaged)' == ''">/Applications/Unity/Hub/Editor/6000.0.50f1/Unity.app/Contents/Managed/UnityEngine</UnityManaged>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="BepInEx"><HintPath>../vendor/core/BepInEx.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(UnityManaged)/UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManaged)/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

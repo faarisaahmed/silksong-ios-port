@@ -1,0 +1,16 @@
+<!-- iOS port: keep game assemblies intact; PlayMaker FSMs and save data resolve types by reflection. -->
+<linker>
+  <assembly fullname="Assembly-CSharp" preserve="all" />
+  <assembly fullname="Assembly-CSharp-firstpass" preserve="all" />
+  <assembly fullname="PlayMaker" preserve="all" />
+  <assembly fullname="ConditionalExpression" preserve="all" />
+  <assembly fullname="TeamCherry.Cinematics" preserve="all" />
+  <assembly fullname="TeamCherry.Localization" preserve="all" />
+  <assembly fullname="TeamCherry.NestedFadeGroup" preserve="all" />
+  <assembly fullname="TeamCherry.SharedUtils" preserve="all" />
+  <assembly fullname="TeamCherry.Splines" preserve="all" />
+  <assembly fullname="TeamCherry.TK2D" preserve="all" />
+  <assembly fullname="Newtonsoft.Json" preserve="all" />
+  <assembly fullname="Unity.Addressables" preserve="all" />
+  <assembly fullname="Unity.ResourceManager" preserve="all" />
+</linker>

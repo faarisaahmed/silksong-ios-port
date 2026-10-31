@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Build-time tool run by ./build and by the Unity build. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RollForward>Major</RollForward>
+    <NoWarn>MSB3277;CS8618</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Same Mono.Cecil BepInEx ships, so patchers and the weaver share AssemblyDefinition types. -->
+    <Reference Include="Mono.Cecil"><HintPath>../vendor/core/Mono.Cecil.dll</HintPath></Reference>
+    <Reference Include="Mono.Cecil.Rocks"><HintPath>../vendor/core/Mono.Cecil.Rocks.dll</HintPath></Reference>
+    <Reference Include="Mono.Cecil.Pdb"><HintPath>../vendor/core/Mono.Cecil.Pdb.dll</HintPath></Reference>
+    <Reference Include="Mono.Cecil.Mdb"><HintPath>../vendor/core/Mono.Cecil.Mdb.dll</HintPath></Reference>
+    <Reference Include="BepInEx"><HintPath>../vendor/core/BepInEx.dll</HintPath></Reference>
+    <Reference Include="MonoMod.Utils"><HintPath>../vendor/core/MonoMod.Utils.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

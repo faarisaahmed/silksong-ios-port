@@ -1,0 +1,120 @@
+#!/bin/zsh
+# build: makes an IPA with the BepInEx mods in ./BepInEx compiled in. Run ./setup once first.
+#
+#   ./build                 -> output/Silksong-Modded.ipa
+#   ./build --name Foo      -> output/Foo.ipa
+#   ./build --sim           -> builds and runs it in the iOS Simulator instead (for testing)
+#   ./build --bepinex <dir> -> use a different BepInEx folder
+#   ./build --bundle-id <id> -> change the app's bundle id (to install it next to another copy)
+set -euo pipefail
+
+HERE=${0:A:h}
+WORK=$HERE/work
+SIM=0
+NAME=Silksong-Modded
+BEPINEX=$HERE/BepInEx
+BUNDLE_ID=com.personal.silksong
+while (( $# )); do
+  case $1 in
+    --sim) SIM=1 ;;
+    --name) NAME=$2; shift ;;
+    --bepinex) BEPINEX=${2:A}; shift ;;
+    --bundle-id) BUNDLE_ID=$2; shift ;;
+    --work) WORK=${2:A}; shift ;;
+    -h|--help) sed -n '2,9p' $0; exit 0 ;;
+    *) echo "unknown option $1"; exit 2 ;;
+  esac
+  shift
+done
+
+step() { print -P "%F{cyan}==>%f $*"; }
+fail() { print -P "%F{red}build failed:%f $*"; print "Logs: $LOG"; exit 1; }
+
+[[ -f $WORK/.done/build ]] || { print -P "%F{red}Run ./setup first%f (it makes the Unity project this builds from)."; exit 1; }
+source $WORK/paths.env
+UNITY=$UNITY_DIR/Unity.app/Contents/MacOS/Unity
+export UNITY_EDITOR_APP=$UNITY_DIR/Unity.app
+export DOTNET_ROOT=$HOME/.dotnet DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+DOTNET=$DOTNET_ROOT/dotnet
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+TOOLS=$WORK/tools/mods
+BACKUP=$WORK/pristine-plugins   # untouched copies of game DLLs that get woven in Assets/Plugins
+
+STAMP=$(date +%Y%m%d-%H%M%S)
+LOG=$WORK/logs/build-$STAMP
+mkdir -p $LOG $HERE/output
+
+[[ -x $UNITY ]] || fail "Unity isn't at $UNITY_DIR anymore"
+if [[ -f $PROJECT/Temp/UnityLockfile ]] && lsof $PROJECT/Temp/UnityLockfile >/dev/null 2>&1; then
+  fail "Unity has the project open; close it first"
+fi
+
+restore_plugins() {
+  [[ -d $BACKUP ]] || return 0
+  for f in $BACKUP/*(N.); do cp -p $f $PROJECT/Assets/Plugins/${f:t}; done
+  rm -rf $BACKUP
+}
+cleanup() {
+  restore_plugins
+  $DOTNET $TOOLS/weaver/Weaver.dll clean --project $PROJECT >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+restore_plugins   # in case a previous run was interrupted
+
+step "Building the mod tools"
+$DOTNET build -c Release -o $TOOLS/weaver $HERE/modding/Weaver >$LOG/tools.log 2>&1 || fail "couldn't build the weaver (see tools.log)"
+$DOTNET build -c Release -o $TOOLS/runtime -p:UnityManaged=$UNITY_DIR/Unity.app/Contents/Managed/UnityEngine $HERE/modding/ModRuntime >>$LOG/tools.log 2>&1 \
+  || fail "couldn't build the mod runtime (see tools.log)"
+cp $HERE/modding/Unity/ModsBuild.cs $PROJECT/Assets/Editor/IOSPort/ModsBuild.cs
+
+step "Reading mods from $BEPINEX"
+$DOTNET $TOOLS/weaver/Weaver.dll prepare --bepinex $BEPINEX --project $PROJECT \
+  --runtime $TOOLS/runtime/IOSPort.ModRuntime.dll --vendor $HERE/modding/vendor/core --weaver $TOOLS/weaver/Weaver.dll \
+  2>&1 | tee $LOG/prepare.log
+(( ${pipestatus[1]} == 0 )) || fail "couldn't read the mods"
+
+# Game DLLs that ship precompiled (PlayMaker, TeamCherry.*, ...) are woven in place and restored afterwards.
+PRECOMPILED=($(python3 -I -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["Precompiled"]))' $PROJECT/IOSPortMods/weaver.json))
+if (( ${#PRECOMPILED} )); then
+  step "Adding hook points to ${PRECOMPILED[*]}"
+  mkdir -p $BACKUP
+  for name in $PRECOMPILED; do
+    dll=$PROJECT/Assets/Plugins/$name.dll
+    cp -p $dll $dll.meta $BACKUP/
+    $DOTNET $TOOLS/weaver/Weaver.dll weave --project $PROJECT --dll $dll --source $BACKUP/$name.dll >>$LOG/weave.log 2>&1 \
+      || { cat $LOG/weave.log; fail "couldn't modify $name.dll"; }
+    # The woven DLL references the iOS-only mod runtime; don't let the editor reject it for that.
+    sed -i '' 's/validateReferences: 1/validateReferences: 0/' $dll.meta
+  done
+  grep "^\[iosport\]" $LOG/weave.log | sed 's/^/  /' || true
+fi
+
+if (( SIM )); then XCODE=$WORK/build/XcodeSim; SIMARG=-iosportSimulator; else XCODE=$WORK/build/Xcode; SIMARG=; fi
+step "Building the iOS player with Unity (about 15-25 minutes)"
+$UNITY -batchmode -quit -projectPath $PROJECT -executeMethod IOSPort.IOSBuild.BuildPlayerOnly \
+  -iosportOut $XCODE -iosportBundleId $BUNDLE_ID ${SIMARG:+$SIMARG} -logFile $LOG/unity.log || {
+    grep -E "error CS|\[IOSPort\]|Exception|BuildFailed|weaver failed" $LOG/unity.log | head -30
+    fail "Unity build failed (see unity.log)"
+  }
+grep "^\[iosport\]" $LOG/unity.log | sed 's/^/  /' || true
+# Make sure the hook points made it through Unity's pipeline into what IL2CPP compiled.
+STRIPPED=$PROJECT/Library/Bee/artifacts/iOS/ManagedStripped/Assembly-CSharp.dll
+if grep -q '"Assembly-CSharp"' $PROJECT/IOSPortMods/weaver.json && ! grep -q "IOSPortGenerated" $STRIPPED; then
+  fail "the game scripts were compiled without the mod hook points (see unity.log)"
+fi
+
+if (( SIM )); then
+  step "Compiling and launching in the iOS Simulator"
+  $HERE/scripts/sim.sh $XCODE $BUNDLE_ID 2>&1 | tee $LOG/sim.log
+  exit ${pipestatus[1]}
+fi
+
+step "Compiling the IPA with Xcode"
+OUT=$HERE/output/$NAME.ipa
+$HERE/tools/make_ipa.sh $XCODE $WORK/build/DerivedData $OUT.partial >$LOG/xcode.log 2>&1 \
+  || { grep -E "error:" $LOG/xcode.log | head; fail "Xcode build failed (see xcode.log)"; }
+mv $OUT.partial $OUT
+
+print
+print -P "%F{green}Done:%f $OUT ($(du -h $OUT | cut -f1))"
+print "Install it with Sideloadly. On the phone, mod configs and logs are in Files > Silksong > BepInEx."

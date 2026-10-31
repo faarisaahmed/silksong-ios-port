@@ -1,0 +1,278 @@
+#!/bin/zsh
+# setup: turns the PC version of Silksong into the iOS port's Unity project and builds the first IPA.
+# Run it once. After that, use ./build to make IPAs with mods.
+#
+#   ./setup "/path/to/Hollow Knight Silksong"     a copy of the Windows game folder
+#   ./setup /path/to/setup_hollow_knight_silksong_*.exe    the GOG offline installer (needs innoextract)
+#   ./setup --steam <steam username>               downloads the Windows version with SteamCMD
+#
+# Options:
+#   --work <dir>    where to put everything (default: ./work). Needs about 75 GB free.
+#   --keep-going    skip the free space check
+#
+# If it stops partway, fix the problem and run the same command again. Finished steps are skipped.
+set -euo pipefail
+
+HERE=${0:A:h}
+WORK=$HERE/work
+SOURCE=
+STEAM_USER=
+CHECK_SPACE=1
+while (( $# )); do
+  case $1 in
+    --work) WORK=${2:A}; shift ;;
+    --steam) STEAM_USER=$2; shift ;;
+    --keep-going) CHECK_SPACE=0 ;;
+    -h|--help) sed -n '2,13p' $0; exit 0 ;;
+    -*) echo "unknown option $1"; exit 2 ;;
+    *) SOURCE=${1:A} ;;
+  esac
+  shift
+done
+
+step() { print -P "\n%F{cyan}==>%f $*"; }
+note() { print "    $*"; }
+fail() { print -P "\n%F{red}setup stopped:%f $*"; print "Logs are in $WORK/logs. Fix the problem and run ./setup again; finished steps are skipped."; exit 1; }
+done_step() { [[ -f $WORK/.done/$1 ]]; }
+mark() { touch $WORK/.done/$1; }
+
+if [[ -z $SOURCE && -z $STEAM_USER ]]; then
+  [[ -f $WORK/.done/game ]] || { sed -n '2,13p' $0; exit 2; }
+fi
+
+mkdir -p $WORK/.done $WORK/logs $WORK/tools
+GAME=$WORK/game
+PROJECT=$WORK/ripped/ExportedProject
+ARCH=$(uname -m)   # arm64 or x86_64
+
+# ---------------------------------------------------------------- checks
+step "Checking this Mac"
+[[ $(uname) == Darwin ]] || fail "this only works on macOS (Xcode is Mac-only)"
+
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+[[ -d $DEVELOPER_DIR ]] || fail "Xcode isn't installed. Get it from the Mac App Store, open it once, then run ./setup again."
+note "Xcode: $(xcodebuild -version 2>/dev/null | head -1)"
+command -v python3 >/dev/null || fail "python3 is missing. Run: xcode-select --install"
+
+if (( CHECK_SPACE )) && ! done_step build; then
+  free=$(df -g $WORK | awk 'NR==2{print $4}')
+  need=75
+  if done_step rip; then need=40; fi
+  (( free >= need )) || fail "only ${free} GB free where the work folder is ($WORK); setup needs about ${need} GB. Free some space, or use --work on a bigger drive."
+  note "Free space: ${free} GB"
+fi
+
+# .NET 8 SDK (installs into ~/.dotnet, no admin password needed)
+export DOTNET_ROOT=$HOME/.dotnet
+if [[ ! -x $DOTNET_ROOT/dotnet ]] || ! $DOTNET_ROOT/dotnet --list-sdks 2>/dev/null | grep -q '^8\.'; then
+  step "Installing the .NET 8 SDK into ~/.dotnet"
+  curl -sSL https://dot.net/v1/dotnet-install.sh -o $WORK/tools/dotnet-install.sh
+  bash $WORK/tools/dotnet-install.sh --channel 8.0 --install-dir $DOTNET_ROOT >$WORK/logs/dotnet.log 2>&1 || fail "couldn't install .NET (see logs/dotnet.log)"
+fi
+DOTNET=$DOTNET_ROOT/dotnet
+export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+
+# Unity 6000.0.50f1 with iOS Build Support
+UNITY_DIR=
+for d in /Applications/Unity/Hub/Editor/6000.0.50f1 $HOME/Applications/Unity/Hub/Editor/6000.0.50f1; do
+  [[ -x $d/Unity.app/Contents/MacOS/Unity ]] && { UNITY_DIR=$d; break; }
+done
+if [[ -z $UNITY_DIR ]]; then
+  step "Unity 6000.0.50f1 isn't installed"
+  print "    Easiest: open Unity Hub > Installs > Install Editor > Archive > download archive,"
+  print "    pick 6000.0.50f1 and tick \"iOS Build Support\"."
+  print -n "    Or setup can download and install it for you now (about 5 GB). Do that? [y/N] "
+  read -r answer
+  [[ $answer == [yY]* ]] || fail "install Unity 6000.0.50f1 with iOS Build Support, then run ./setup again"
+  UNITY_DIR=$HOME/Applications/Unity/Hub/Editor/6000.0.50f1
+  B=https://download.unity3d.com/download_unity/f1ef1dca8bff
+  if [[ $ARCH == arm64 ]]; then EDITOR_PKG=MacEditorInstallerArm64/Unity-6000.0.50f1.pkg; else EDITOR_PKG=MacEditorInstaller/Unity-6000.0.50f1.pkg; fi
+  DL=$WORK/tools/unity-dl; rm -rf $DL; mkdir -p $DL
+  note "downloading the editor..."
+  curl -fSL -C - -o $DL/editor.pkg $B/$EDITOR_PKG || fail "editor download failed"
+  note "downloading iOS Build Support..."
+  curl -fSL -C - -o $DL/ios.pkg $B/MacEditorTargetInstaller/UnitySetup-iOS-Support-for-Editor-6000.0.50f1.pkg || fail "iOS support download failed"
+  pkgutil --expand-full $DL/editor.pkg $DL/ed && pkgutil --expand-full $DL/ios.pkg $DL/ios || fail "couldn't unpack the Unity installers"
+  mkdir -p $UNITY_DIR/PlaybackEngines
+  mv $DL/ed/Unity.pkg.tmp/Payload/Unity/* $UNITY_DIR/
+  mv $DL/ios/TargetSupport.pkg.tmp/Payload/iOSSupport $UNITY_DIR/PlaybackEngines/
+  rm -rf $DL
+  note "Installed to $UNITY_DIR. In Unity Hub, use Installs > Locate to add it there too."
+fi
+[[ -d $UNITY_DIR/PlaybackEngines/iOSSupport ]] || fail "Unity is installed but iOS Build Support isn't. In Unity Hub: Installs > 6000.0.50f1 > gear icon > Add modules > iOS Build Support."
+UNITY=$UNITY_DIR/Unity.app/Contents/MacOS/Unity
+note "Unity: $UNITY_DIR"
+
+# Remember where things are for ./build
+cat > $WORK/paths.env <<EOF
+UNITY_DIR="$UNITY_DIR"
+PROJECT="$PROJECT"
+EOF
+
+# Runs Unity in batch mode and explains the usual failures.
+run_unity() {
+  local log=$1; shift
+  $UNITY -batchmode -quit -projectPath $PROJECT -buildTarget iOS -logFile $log "$@" && return 0
+  if grep -qiE "No valid Unity Editor license|license is not|LicensingClient.*(error|fail)|Com.Unity.Licensing" $log 2>/dev/null; then
+    fail "Unity has no license. Open Unity Hub, sign in, and add a free Personal license (Preferences > Licenses), then run ./setup again."
+  fi
+  grep -E "error CS|\[IOSPort\]|BuildFailed|Exception" $log | head -20
+  return 1
+}
+
+# ---------------------------------------------------------------- the game
+if ! done_step game; then
+  step "Getting the PC game files"
+  rm -rf $GAME
+  if [[ -n $STEAM_USER ]]; then
+    SC=$WORK/tools/steamcmd
+    if [[ ! -x $SC/steamcmd.sh ]]; then
+      mkdir -p $SC
+      curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_osx.tar.gz | tar xz -C $SC || fail "couldn't download SteamCMD"
+    fi
+    note "Logging in to Steam as $STEAM_USER. It will ask for your password and Steam Guard code."
+    # Silksong's Steam app id is 1030300. The Windows version is the one the port is made from.
+    $SC/steamcmd.sh +@sSteamCmdForcePlatformType windows +force_install_dir $GAME \
+      +login $STEAM_USER +app_update 1030300 validate +quit || fail "SteamCMD couldn't download the game"
+  elif [[ -f $SOURCE && $SOURCE == *.exe ]]; then
+    command -v innoextract >/dev/null || fail "innoextract is needed for the GOG installer. Install it with Homebrew: brew install innoextract"
+    mkdir -p $WORK/gog-extract
+    note "Extracting the GOG installer (the .bin files next to it are used too)..."
+    (cd $WORK/gog-extract && innoextract -q -d . $SOURCE) >$WORK/logs/innoextract.log 2>&1 || fail "innoextract failed (see logs/innoextract.log)"
+    data=$(find $WORK/gog-extract -maxdepth 4 -type d -name "Hollow Knight Silksong_Data" | head -1)
+    [[ -n $data ]] || fail "the installer didn't contain Hollow Knight Silksong_Data"
+    mv ${data:h} $GAME && rm -rf $WORK/gog-extract
+  elif [[ -d $SOURCE ]]; then
+    [[ -d "$SOURCE/Hollow Knight Silksong_Data" ]] || fail "$SOURCE doesn't look like the game folder (no \"Hollow Knight Silksong_Data\" inside). Point it at the folder with Hollow Knight Silksong.exe."
+    note "Copying $SOURCE"
+    cp -Rc $SOURCE $GAME 2>/dev/null || cp -R $SOURCE $GAME
+  else
+    fail "$SOURCE isn't a game folder or a GOG .exe installer"
+  fi
+  [[ -d "$GAME/Hollow Knight Silksong_Data/StreamingAssets/aa/StandaloneWindows64" ]] \
+    || fail "these aren't the Windows game files. The port needs the Windows version, even on Steam or GOG for Mac."
+  # A modded PC install would get mods ripped into the project; leave them out.
+  rm -rf $GAME/BepInEx $GAME/winhttp.dll $GAME/doorstop_config.ini $GAME/.doorstop_version "$GAME/Hollow Knight Silksong_Data/Mods"
+  if [[ -f "$GAME/Hollow Knight Silksong_Data/boot.config.stitchwork-bak" ]]; then
+    mv "$GAME/Hollow Knight Silksong_Data/boot.config.stitchwork-bak" "$GAME/Hollow Knight Silksong_Data/boot.config"
+  fi
+  mark game
+fi
+DATA="$GAME/Hollow Knight Silksong_Data"
+BUNDLES="$DATA/StreamingAssets/aa/StandaloneWindows64"
+note "Game files: $GAME"
+
+# ---------------------------------------------------------------- rip
+if ! done_step rip; then
+  step "Ripping the game into a Unity project with AssetRipper (about 15-30 minutes)"
+  AR=$WORK/tools/AssetRipper
+  if [[ ! -x $AR/AssetRipper.GUI.Free ]]; then
+    mkdir -p $AR
+    if [[ $ARCH == arm64 ]]; then f=AssetRipper_mac_arm64.tar.xz; else f=AssetRipper_mac_x64.tar.xz; fi
+    curl -fsSL -o $AR/ar.tar.xz https://github.com/AssetRipper/AssetRipper/releases/download/2.0.0/$f || fail "couldn't download AssetRipper"
+    tar xJf $AR/ar.tar.xz -C $AR && rm $AR/ar.tar.xz
+    xattr -dr com.apple.quarantine $AR 2>/dev/null || true
+  fi
+  rm -rf $WORK/ripped
+  PORT=51888
+  (cd $AR && ./AssetRipper.GUI.Free --headless --port $PORT --log-path $WORK/logs/assetripper.log >/dev/null 2>&1) &
+  ARPID=$!
+  trap "kill $ARPID 2>/dev/null || true" EXIT
+  U=http://127.0.0.1:$PORT
+  for i in {1..60}; do curl -s -o /dev/null $U && break; sleep 1; done
+  curl -s -o /dev/null $U || fail "AssetRipper didn't start (see logs/assetripper.log)"
+  curl -s -o /dev/null -X POST $U/Reset
+  # The game's bundles don't record their Unity version, so it has to be given (DefaultVersion).
+  curl -fs -o /dev/null -X POST $U/Settings/Update -d "DefaultVersion=6000.0.50f1&TargetVersion=0.0.0a0&ScriptContentLevel=Level2&BundledAssetsExportMode=DirectExport&AudioExportFormat=Default&ImageExportFormat=Png&LightmapTextureExportFormat=Yaml&SpriteExportMode=Yaml&ShaderExportMode=Dummy&TextExportMode=Parse&ScriptLanguageVersion=AutoSafe&ScriptExportMode=Hybrid&PreferOriginalTextureExtension=on" \
+    || fail "couldn't configure AssetRipper"
+  note "loading the game..."
+  curl -fs -o /dev/null --max-time 0 -X POST --data-urlencode "path=$GAME" $U/LoadFolder || fail "AssetRipper couldn't load the game (see logs/assetripper.log)"
+  note "exporting (this is the long part)..."
+  curl -fs -o /dev/null --max-time 0 -X POST --data-urlencode "path=$WORK/ripped" $U/Export/UnityProject || fail "AssetRipper export failed (see logs/assetripper.log)"
+  kill $ARPID 2>/dev/null || true; trap - EXIT
+  [[ -d $PROJECT/Assets/Scripts/Assembly-CSharp ]] || fail "AssetRipper finished but the project is incomplete (see logs/assetripper.log)"
+  # The PC bundles get copied in too; the port rebuilds them for iOS, so they're just 7 GB of dead weight.
+  rm -rf $PROJECT/Assets/StreamingAssets/aa
+  mark rip
+fi
+
+# ---------------------------------------------------------------- port
+if ! done_step port; then
+  step "Applying the iOS port"
+  # Small tools that read the PC game's Addressables catalog and bundles.
+  if [[ ! -d $WORK/tools/AddressablesTools ]]; then
+    git clone -q https://github.com/nesrak1/AddressablesTools $WORK/tools/AddressablesTools || fail "couldn't download AddressablesTools"
+    git -C $WORK/tools/AddressablesTools checkout -q 3dbc8210a10c9ef0592580bb6710b5623fcc8d33
+  fi
+  rm -rf $WORK/tools/catdump $WORK/tools/bundledump
+  cp -R $HERE/tools/catdump $HERE/tools/bundledump $WORK/tools/
+  sed -i '' 's#../AddressablesTools/AddressablesTools/AddressablesTools.csproj#'$WORK/tools/AddressablesTools/AddressablesTools/AddressablesTools.csproj'#' $WORK/tools/catdump/catdump.csproj
+  $DOTNET build -c Release -o $WORK/tools/catdump/out $WORK/tools/catdump >$WORK/logs/tools.log 2>&1 || fail "couldn't build catdump (see logs/tools.log)"
+  $DOTNET build -c Release -o $WORK/tools/bundledump/out $WORK/tools/bundledump >>$WORK/logs/tools.log 2>&1 || fail "couldn't build bundledump (see logs/tools.log)"
+  note "reading the game's asset catalog..."
+  $DOTNET $WORK/tools/catdump/out/catdump.dll "$DATA/StreamingAssets/aa/catalog.bin" $WORK/catalog.jsonl || fail "couldn't read catalog.bin"
+  $DOTNET $WORK/tools/bundledump/out/bundledump.dll $BUNDLES $WORK/bundle_contents.tsv 2>>$WORK/logs/tools.log | sed 's/^/    /'
+
+  # The game ships Addressables as plain DLLs; the port uses the real package so it can rebuild bundles for iOS.
+  mkdir -p $WORK/removed-plugins
+  for n in Unity.Addressables Unity.ResourceManager Unity.ScriptableBuildPipeline Unity.Profiling.Core; do
+    if [[ -f $PROJECT/Assets/Plugins/$n.dll ]]; then mv $PROJECT/Assets/Plugins/$n.dll{,.meta} $WORK/removed-plugins/; fi
+  done
+  python3 -I - $PROJECT/Packages/manifest.json <<'EOF'
+import json, sys
+p = sys.argv[1]
+m = json.load(open(p))
+m["dependencies"]["com.unity.addressables"] = "2.5.0"
+m["dependencies"] = dict(sorted(m["dependencies"].items()))
+json.dump(m, open(p, "w"), indent=2)
+EOF
+
+  # Port code, editor build scripts, iPhone plugins, touch controls art, icon and splash.
+  rsync -a $HERE/port/Assets/ $PROJECT/Assets/
+  cp $HERE/modding/Unity/ModsBuild.cs $PROJECT/Assets/Editor/IOSPort/ModsBuild.cs
+  # The game's own menu font, for the port's settings screens.
+  mkdir -p $PROJECT/Assets/Resources/IOSPortFonts
+  for f in TrajanPro-Regular TrajanPro-Bold; do
+    src=$(find $PROJECT/Assets/Font $PROJECT/Assets/Fonts -name "$f.otf" 2>/dev/null | head -1)
+    if [[ -n $src ]]; then cp $src $PROJECT/Assets/Resources/IOSPortFonts/; else note "($f.otf not found; the port's menus will use a plain font)"; fi
+  done
+
+  python3 -I $HERE/tools/patch_game.py $PROJECT/Assets || fail "patching the game scripts failed (see above)"
+  python3 -I $HERE/tools/make_addressables_map.py $WORK/catalog.jsonl $WORK/bundle_contents.tsv $PROJECT || fail "couldn't work out the asset layout"
+  python3 -I $HERE/tools/sprite_textures.py $PROJECT/Assets $PROJECT/Assets/Editor/IOSPort/sprite_textures.txt
+
+  # AssetRipper's free version exports shaders as empty placeholders; these make working iPhone versions.
+  TMPPKG="$UNITY_DIR/Unity.app/Contents/Resources/PackageManager/BuiltInPackages/com.unity.ugui/Package Resources/TMP Essential Resources.unitypackage"
+  rm -rf $WORK/tmp_pkg $WORK/tmp_shaders; mkdir -p $WORK/tmp_pkg $WORK/tmp_shaders
+  tar xzf $TMPPKG -C $WORK/tmp_pkg || fail "couldn't read TextMeshPro's shaders from Unity"
+  for d in $WORK/tmp_pkg/*; do
+    p=$(cat $d/pathname 2>/dev/null) || continue
+    if [[ $p == *.shader || $p == *.cginc ]]; then cp $d/asset $WORK/tmp_shaders/${p:t}; fi
+  done
+  python3 -I $HERE/tools/gen_shaders.py $PROJECT/Assets $PROJECT/Assets $WORK/tmp_shaders | sed 's/^/    /' || fail "shader replacement failed"
+  rm -rf $WORK/tmp_pkg
+  mark port
+fi
+
+# ---------------------------------------------------------------- import + build
+if ! done_step import; then
+  step "Opening the project in Unity for the first time (about 20-40 minutes)"
+  run_unity $WORK/logs/import.log || fail "Unity couldn't import the project (see logs/import.log)"
+  mark import
+fi
+
+XCODE=$WORK/build/Xcode
+if ! done_step build; then
+  step "Building the iOS version: textures, asset bundles and the Xcode project (about 45-90 minutes)"
+  run_unity $WORK/logs/build.log -executeMethod IOSPort.IOSBuild.Build -iosportOut $XCODE || fail "the Unity build failed (see logs/build.log)"
+  mark build
+fi
+
+step "Compiling the IPA with Xcode (about 5-10 minutes)"
+mkdir -p $HERE/output
+$HERE/tools/make_ipa.sh $XCODE $WORK/build/DerivedData $HERE/output/Silksong.ipa >$WORK/logs/xcode.log 2>&1 \
+  || { grep -E "error:" $WORK/logs/xcode.log | head; fail "Xcode build failed (see logs/xcode.log)"; }
+
+print
+print -P "%F{green}Setup finished:%f $HERE/output/Silksong.ipa ($(du -h $HERE/output/Silksong.ipa | cut -f1))"
+print "Install it with Sideloadly. To add mods, put them in BepInEx/plugins and run ./build"
