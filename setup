@@ -7,7 +7,7 @@
 #   ./setup --steam <steam username>               downloads the Windows version with SteamCMD
 #
 # Options:
-#   --work <dir>    where to put everything (default: ./work). Needs about 75 GB free.
+#   --work <dir>    where to put everything (default: ./work). Needs about 65 GB free.
 #   --keep-going    skip the free space check
 #
 # If it stops partway, fix the problem and run the same command again. Finished steps are skipped.
@@ -37,7 +37,7 @@ done_step() { [[ -f $WORK/.done/$1 ]]; }
 mark() { touch $WORK/.done/$1; }
 
 if [[ -z $SOURCE && -z $STEAM_USER ]]; then
-  [[ -f $WORK/.done/game ]] || { sed -n '2,13p' $0; exit 2; }
+  [[ -f $WORK/.done/game || -f $WORK/.done/port ]] || { sed -n '2,13p' $0; exit 2; }
 fi
 
 mkdir -p $WORK/.done $WORK/logs $WORK/tools
@@ -56,7 +56,7 @@ command -v python3 >/dev/null || fail "python3 is missing. Run: xcode-select --i
 
 if (( CHECK_SPACE )) && ! done_step build; then
   free=$(df -g $WORK | awk 'NR==2{print $4}')
-  need=75
+  need=65
   if done_step rip; then need=40; fi
   (( free >= need )) || fail "only ${free} GB free where the work folder is ($WORK); setup needs about ${need} GB. Free some space, or use --work on a bigger drive."
   note "Free space: ${free} GB"
@@ -121,7 +121,7 @@ run_unity() {
 }
 
 # ---------------------------------------------------------------- the game
-if ! done_step game; then
+if ! done_step game && ! done_step port; then
   step "Getting the PC game files"
   rm -rf $GAME
   if [[ -n $STEAM_USER ]]; then
@@ -160,7 +160,7 @@ if ! done_step game; then
 fi
 DATA="$GAME/Hollow Knight Silksong_Data"
 BUNDLES="$DATA/StreamingAssets/aa/StandaloneWindows64"
-note "Game files: $GAME"
+done_step port || note "Game files: $GAME"
 
 # ---------------------------------------------------------------- rip
 if ! done_step rip; then
@@ -252,6 +252,9 @@ EOF
   python3 -I $HERE/tools/gen_shaders.py $PROJECT/Assets $PROJECT/Assets $WORK/tmp_shaders | sed 's/^/    /' || fail "shader replacement failed"
   rm -rf $WORK/tmp_pkg
   mark port
+  # The PC files aren't needed from here on (./build only uses the Unity project), so give the space back.
+  rm -rf $GAME $WORK/.done/game
+  note "deleted setup's copy of the PC game files (no longer needed)"
 fi
 
 # ---------------------------------------------------------------- import + build

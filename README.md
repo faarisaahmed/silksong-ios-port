@@ -19,13 +19,13 @@ The rest of this file goes through everything step by step. If you've never done
 
 **A Mac.** This can't be done on Windows or Linux, because building an iPhone app needs Xcode and Xcode only runs on macOS. Apple Silicon (M1 or newer) is best. Intel Macs should work but are a lot slower and haven't been tested. You need a macOS version that runs Xcode 15 or newer (macOS 13.5 or later).
 
-**About 75 GB of free disk space** while setting up. Roughly:
+**About 65 GB of free disk space** while setting up (75 to be comfortable). Roughly:
 
 | What | Size |
 |---|---|
 | Xcode | 15-20 GB |
 | Unity 6000.0.50f1 with iOS support | about 10 GB |
-| The PC game files | about 8 GB |
+| The PC game files (setup deletes its copy once it no longer needs it) | about 8 GB |
 | The ripped Unity project (plus Unity's cache) | about 40 GB |
 | Build output and the IPA | 5-10 GB |
 
@@ -215,7 +215,6 @@ If a mod mostly works but one feature doesn't, it's usually one of these.
 
 After setup has finished and the IPA works, you can delete:
 
-- `work/game` (about 8 GB). Only needed to rip the game again.
 - `work/tools/AssetRipper`, `work/tools/steamcmd`.
 - `work/build/DerivedData` (about 6 GB). Xcode recreates it, the next build just takes a few minutes longer.
 - The Unity installer leftovers in `work/tools`, if any.
