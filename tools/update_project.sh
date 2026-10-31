@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Brings an already set up Unity project up to date with the port in this repo. setup and build both run it,
 # so after a git pull ./build (or ./setup) picks up fixes without ripping the game again.
-# If it changes anything it deletes work/.done/build, so ./setup rebuilds the plain IPA too.
+# If it changes anything the game's assets depend on, it deletes work/.done/build, so the next ./setup or
+# ./build rebuilds them.
 # Usage: update_project.sh <repo dir> <work dir> <project dir>
 set -euo pipefail
 
@@ -32,10 +33,10 @@ json.dump(m, open(p, "w"), indent=2)
 sys.exit(1)
 EOF
 
-# Edits to the game's scripts, then the port's own code and art.
+# Edits to the game's scripts, then the port's own code and art. Game and port scripts are compiled by every
+# player build, so changes to them don't need the asset rebuild; editor scripts and art do.
 out=$(python3 -I $HERE/tools/patch_game.py $PROJECT/Assets) || { echo "$out"; exit 1; }
-if [[ $out == *patched* ]]; then changed=1; fi
-if [[ -n $(rsync -a --itemize-changes $HERE/port/Assets/ $PROJECT/Assets/ | grep '^>f') ]]; then changed=1; fi
+if [[ -n $(rsync -a --itemize-changes $HERE/port/Assets/ $PROJECT/Assets/ | grep '^>f' | grep -v -E ' Scripts/.*\.cs$') ]]; then changed=1; fi
 
 # Shader replacements.
 out=$(python3 -I $HERE/tools/gen_shaders.py $PROJECT/Assets $PROJECT/Assets $WORK/tmp_shaders)

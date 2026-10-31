@@ -111,6 +111,18 @@ patch("ForceCameraAspect.cs", [
      "\t\tfloat clampedBetween = new MinMaxFloat(1.6f, (Application.isMobilePlatform && !IOSPort.PortSettings.FullWidth) ? 1.7777778f : 2.3916667f).GetClampedBetween(num);"),
 ])
 
+# Lever doors: in the iOS player a gate's Animator can come out of scene loading with stale bindings for parts
+# of the door (the "door offset" halves never move, so the door plays Open but stays shut). Rebinding just
+# before each animation fixes it.
+patch("Gate.cs", [
+    ("\t\t\tanimator.enabled = true;\n\t\t\tanimator.Play(openAnim);",
+     "\t\t\tanimator.enabled = true;\n\t\t\tanimator.Rebind(); // iOS port: see patch_game.py\n\t\t\tanimator.Play(openAnim);"),
+    ("\t\t\tanimator.enabled = true;\n\t\t\tif (!string.IsNullOrEmpty(openedAnim))",
+     "\t\t\tanimator.enabled = true;\n\t\t\tanimator.Rebind(); // iOS port: see patch_game.py\n\t\t\tif (!string.IsNullOrEmpty(openedAnim))"),
+    ("\t\t\tanimator.enabled = true;\n\t\t\tanimator.Play(closeAnim);",
+     "\t\t\tanimator.enabled = true;\n\t\t\tanimator.Rebind(); // iOS port: see patch_game.py\n\t\t\tanimator.Play(closeAnim);"),
+])
+
 
 # Controllers: the game pauses on Start, and Unity's iOS controller input has no fixed button number for the
 # second menu button (Xbox View, PlayStation Share/Create, MFi Options), so the unused ones all press Back,

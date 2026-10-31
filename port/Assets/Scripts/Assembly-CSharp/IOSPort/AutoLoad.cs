@@ -31,7 +31,7 @@ namespace IOSPort
 
         IEnumerator Start()
         {
-            while (GameManager.instance == null || UIManager.instance == null || UIManager.instance.menuState != MainMenuState.MAIN_MENU)
+            while (GameManager.UnsafeInstance == null || UIManager.instance == null || UIManager.instance.menuState != MainMenuState.MAIN_MENU)
                 yield return null;
             yield return new WaitForSeconds(2f);
             Debug.Log("[IOSPort] auto-loading save slot " + slot);

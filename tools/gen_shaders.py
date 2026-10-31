@@ -31,7 +31,7 @@ PASSTHROUGH = {
     "Custom/Contrast Effect", "Custom/Screen-Space Blit", "Hidden/NoiseAndGrain",
 }
 
-# Unity Standard Assets image effects: reimplemented from their published behaviour.
+# Image effects reimplemented from their published behaviour (Unity Standard Assets) or from the script using them.
 SPECIAL = {
     # Per-area colour grading: per-channel curves from a 256x4 ramp, then saturation.
     "Hidden/ColorCorrectionCurvesSimple": """	SubShader {
@@ -112,6 +112,33 @@ SPECIAL = {
 		Pass { CGPROGRAM
 			#pragma vertex vert_img
 			#pragma fragment fragBlurH
+			ENDCG }
+	}""",
+    # The light map blur (LightBlur.cs): pass 0 horizontal, pass 1 vertical, _BlurInfo.xy is the texel size.
+    "Hollow Knight/Light Blur": """	CGINCLUDE
+		#include "UnityCG.cginc"
+		sampler2D _MainTex;
+		float4 _BlurInfo;
+		static const half curve[5] = { 0.0625, 0.25, 0.375, 0.25, 0.0625 };
+		fixed4 blur(float2 uv, float2 step)
+		{
+			fixed4 c = 0;
+			for (int l = 0; l < 5; l++)
+				c += tex2D(_MainTex, uv + step * (l - 2)) * curve[l];
+			return c;
+		}
+		fixed4 fragH(v2f_img i) : SV_Target { return blur(i.uv, float2(_BlurInfo.x, 0)); }
+		fixed4 fragV(v2f_img i) : SV_Target { return blur(i.uv, float2(0, _BlurInfo.y)); }
+	ENDCG
+	SubShader {
+		ZTest Always Cull Off ZWrite Off Blend Off
+		Pass { CGPROGRAM
+			#pragma vertex vert_img
+			#pragma fragment fragH
+			ENDCG }
+		Pass { CGPROGRAM
+			#pragma vertex vert_img
+			#pragma fragment fragV
 			ENDCG }
 	}""",
 }

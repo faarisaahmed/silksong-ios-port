@@ -13,6 +13,18 @@ Short version:
 
 The rest of this file goes through everything step by step. If you've never done this kind of thing before, read it top to bottom once before starting.
 
+### Common questions
+
+**Do I need the PC version?** Yes. Everything is built from the Windows files of Silksong (Steam or GOG), even if you only want to play on iPhone. The Switch, PlayStation or Xbox versions can't be used.
+
+**Can I add mods to an IPA someone else made?** No. Inside an IPA the game's code is already compiled for iPhone, so there's nothing left for mod DLLs to hook into. Mods have to be added while building, on a Mac that has done `./setup` with the PC game files. If you don't have a Mac, ask someone who has one set up to run `./build` with your `BepInEx` folder and send you the IPA.
+
+**Can I drop mods into the Files app on my phone?** Not for code mods. iOS doesn't let apps load new code after they're installed. Mod settings (`.cfg`) and the files mods read (PNGs, sounds, text) can be changed on the phone, see [On the phone](#on-the-phone).
+
+**What do I need for a modded IPA, in short?** A Mac with Xcode, the PC game files, and the mods' normal PC (BepInEx 5) downloads in `BepInEx/plugins/`. Then `./setup` once and `./build` each time you change mods.
+
+**Do I need to rebuild for every mod change?** Yes, run `./build` again (about 25 minutes) and reinstall the IPA. Your saves stay.
+
 ---
 
 ## What you need

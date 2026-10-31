@@ -9,7 +9,7 @@ namespace IOSPort
     // the touch HUD in the Simulator. Lines: "<seconds after gameplay starts> down <finger> <x> <y>",
     // "<seconds> up <finger>" or "<seconds> shot <name>" (x/y are safe-area fractions, 0,0 = bottom left).
     // "sdown" takes whole-screen fractions instead; "press <InputControlType>" / "release" hold a virtual
-    // controller button; "export" runs EXPORT SAVES; "kill" deals Hornet lethal damage (to check the death effect). A first line of "title"
+    // controller button; "export" runs EXPORT SAVES; "noclip" and "warp" press the DebugTools buttons, "gates" logs the room's gates; "kill" deals Hornet lethal damage (to check the death effect). A first line of "title"
     // starts the clock on the title screen instead of in gameplay.
     public class TouchScript : MonoBehaviour
     {
@@ -59,6 +59,14 @@ namespace IOSPort
                 }
                 else if (p[1] == "export")
                     SaveExport.Export();
+                else if (p[1] == "noclip")
+                    DebugTools.ToggleNoclip();
+                else if (p[1] == "warp")
+                    DebugTools.WarpToVaultsDoor();
+                else if (p[1] == "gates")
+                    DebugTools.LogGates();
+                else if (p[1] == "probe" && p.Length >= 3)
+                    DebugTools.ProbeGate(string.Join(" ", p, 2, p.Length - 2));
                 else if (p[1] == "release")
                     TouchGamepad.TestButton = InControl.InputControlType.None;
                 else if (p[1] == "up" && p.Length >= 3)
@@ -76,7 +84,8 @@ namespace IOSPort
                         + " pauseBinding=" + (handler != null ? string.Join(",", System.Linq.Enumerable.Select(handler.inputActions.Pause.Bindings, b => b.ToString())) : ""));
                 }
                 else if (p[1] == "shot" && p.Length >= 3)
-                    ScreenCapture.CaptureScreenshot(Path.Combine(Application.persistentDataPath, "touchtest_" + p[2] + ".png"));
+                    // On iOS the path is taken relative to the app's Documents folder.
+                    ScreenCapture.CaptureScreenshot("touchtest_" + p[2] + ".png");
                 Debug.Log("[IOSPort] touch script: " + line);
             }
         }
