@@ -57,7 +57,7 @@ command -v python3 >/dev/null || fail "python3 is missing. Run: xcode-select --i
 if (( CHECK_SPACE )) && ! done_step build; then
   free=$(df -g $WORK | awk 'NR==2{print $4}')
   need=65
-  if done_step rip; then need=40; fi
+  if done_step import; then need=15; elif done_step rip; then need=40; fi
   (( free >= need )) || fail "only ${free} GB free where the work folder is ($WORK); setup needs about ${need} GB. Free some space, or use --work on a bigger drive."
   note "Free space: ${free} GB"
 fi
@@ -113,7 +113,7 @@ EOF
 run_unity() {
   local log=$1; shift
   $UNITY -batchmode -quit -projectPath $PROJECT -buildTarget iOS -logFile $log "$@" && return 0
-  if grep -qiE "No valid Unity Editor license|license is not|LicensingClient.*(error|fail)|Com.Unity.Licensing" $log 2>/dev/null; then
+  if grep -qiE "No valid Unity Editor license|license is not (valid|active)|Com.Unity.Licensing" $log 2>/dev/null; then
     fail "Unity has no license. Open Unity Hub, sign in, and add a free Personal license (Preferences > Licenses), then run ./setup again."
   fi
   grep -E "error CS|\[IOSPort\]|BuildFailed|Exception" $log | head -20
@@ -256,6 +256,9 @@ EOF
   rm -rf $GAME $WORK/.done/game
   note "deleted setup's copy of the PC game files (no longer needed)"
 fi
+
+# Fixes made to the port after this project was set up.
+$HERE/tools/update_project.sh $HERE $WORK $PROJECT
 
 # ---------------------------------------------------------------- import + build
 if ! done_step import; then

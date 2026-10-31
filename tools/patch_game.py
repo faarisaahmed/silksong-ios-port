@@ -56,6 +56,16 @@ patch("InControl/NativeInputDeviceManager.cs", [
      "\t\t\tif (Application.platform != RuntimePlatform.OSXPlayer && Application.platform != RuntimePlatform.OSXEditor && Application.platform != RuntimePlatform.WindowsPlayer && Application.platform != RuntimePlatform.WindowsEditor)"),
 ])
 
+# The Input System's Switch Pro and desktop DualSense types aren't built for iOS, so match those by layout
+# name instead (which also gives DualSense controllers on iOS their PlayStation 5 prompts).
+patch("InControl/NewUnityInputDevice.cs", [
+    ("using UnityEngine.InputSystem.Switch;\n", "// iOS port: no UnityEngine.InputSystem.Switch on iOS (see DetectDeviceStyle).\n"),
+    ("if (!(unityDevice is DualSenseGamepadHID))",
+     "if (!unityDevice.layout.StartsWith(\"DualSense\"))"),
+    ("if (unityDevice is SwitchProControllerHID)",
+     "if (unityDevice.layout.Contains(\"SwitchPro\"))"),
+])
+
 # Detect controller types (for button prompts) on iPhone too, and skip the Windows-only XInput lookup.
 patch("InputHandler.cs", [
     ("Application.platform == RuntimePlatform.LinuxPlayer || Application.platform == RuntimePlatform.LinuxEditor)\n\t\t{\n\t\t\tswitch (inputDevice.DeviceStyle)",

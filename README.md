@@ -221,6 +221,17 @@ After setup has finished and the IPA works, you can delete:
 
 Don't delete `work/ripped`. That's the project `./build` uses.
 
+## Getting port fixes
+
+When this repo gets fixes, pull them and run setup again. It doesn't rip the game again, it just updates your Unity project and rebuilds the IPA (about an hour the first time after an update):
+
+```
+git pull
+./setup
+```
+
+`./build` picks up fixes too, so if you only use modded builds you can just run that.
+
 ## Updating to a new game version
 
 Get the new game files and run setup again with a fresh work folder:
@@ -258,6 +269,7 @@ Delete `work-old` once the new one builds. Mods may need updating for a new game
 | `build` | Builds an IPA with the mods in `BepInEx/` |
 | `port/` | The port itself: iPhone code, touch controls, editor build scripts, iOS plugins, art. Copied into the Unity project by setup. |
 | `tools/patch_game.py` | The small edits made to the game's own scripts (online features off, controller fixes, save location, screen width) |
+| `tools/update_project.sh` | Brings an already set up project up to date with fixes in this repo (setup and build both run it) |
 | `tools/make_addressables_map.py` | Rebuilds the game's asset bundle layout for iOS from the PC game's catalog |
 | `tools/gen_shaders.py` | Replaces the empty shaders AssetRipper exports with working ones |
 | `tools/catdump`, `tools/bundledump` | Read the PC game's Addressables catalog and bundle contents |

@@ -30,7 +30,7 @@ done
 step() { print -P "%F{cyan}==>%f $*"; }
 fail() { print -P "%F{red}build failed:%f $*"; print "Logs: $LOG"; exit 1; }
 
-[[ -f $WORK/.done/build ]] || { print -P "%F{red}Run ./setup first%f (it makes the Unity project this builds from)."; exit 1; }
+[[ -f $WORK/.done/import ]] || { print -P "%F{red}Run ./setup first%f (it makes the Unity project this builds from)."; exit 1; }
 source $WORK/paths.env
 UNITY=$UNITY_DIR/Unity.app/Contents/MacOS/Unity
 export UNITY_EDITOR_APP=$UNITY_DIR/Unity.app
@@ -60,6 +60,15 @@ cleanup() {
 }
 trap cleanup EXIT
 restore_plugins   # in case a previous run was interrupted
+
+$HERE/tools/update_project.sh $HERE $WORK $PROJECT
+if [[ ! -f $WORK/.done/build ]]; then
+  # The port changed since the last full build (or it never finished); the game's assets need rebuilding once.
+  step "Rebuilding the game's assets for the updated port (about 45-90 minutes, only this once)"
+  $UNITY -batchmode -quit -projectPath $PROJECT -executeMethod IOSPort.IOSBuild.Build -iosportOut $WORK/build/Xcode \
+    -logFile $LOG/assets.log || fail "the asset build failed (see assets.log)"
+  touch $WORK/.done/build
+fi
 
 step "Building the mod tools"
 $DOTNET build -c Release -o $TOOLS/weaver $HERE/modding/Weaver >$LOG/tools.log 2>&1 || fail "couldn't build the weaver (see tools.log)"

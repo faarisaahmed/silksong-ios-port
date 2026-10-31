@@ -11,6 +11,9 @@ keep their values) and writes a real SubShader chosen by category:
   sprite       -> premultiplied alpha sprite with tint, flash, desaturation, UV scrolling,
                   blend mode and stencil support where the material has those properties
 
+Shaders it generated before are regenerated too, so it can be run again after changes here.
+Files are only rewritten when their contents change (so Unity doesn't reimport them).
+
 Usage: gen_shaders.py <project Assets dir> <out dir> <TMP shader dir>
 Writes replacements to <out dir>/<path relative to Assets>. setup passes the Assets dir as <out dir>,
 so the dummies are replaced in place.
@@ -21,6 +24,7 @@ import shutil
 import sys
 
 ASSETS, OUT, TMP = sys.argv[1:4]
+GENERATED = "// iOS port: generated replacement for an AssetRipper dummy shader"
 
 PASSTHROUGH = {
     "Hidden/UberPostprocess", "ImageEffects/Deband", "Custom/Brightness Effect",
@@ -124,7 +128,7 @@ TMP_INCLUDES = ["TMPro.cginc", "TMPro_Properties.cginc", "TMPro_Mobile.cginc", "
 
 def blend_for(name):
     n = name.lower()
-    if any(k in n for k in ("linear dodge", "lineardodge", "additive", "colordodge", "color dodge", "lighten", "lightercolor", "shining", "linear light", "linearlight")):
+    if any(k in n for k in ("linear dodge", "lineardodge", "additive", "colordodge", "color dodge", "lighten", "lightercolor", "shining")):
         return "One One"  # additive
     if "screen" in n:
         return "OneMinusDstColor One"
@@ -179,19 +183,31 @@ def sprite_subshader(name, props):
         post.append("c.rgb = lerp(c.rgb, dot(c.rgb, float3(0.3, 0.59, 0.11)).xxx, saturate(_Desaturation));")
     if "_TextureFade" in props:  # UI masks fading
         pass
-    blend = blend_for(name)
+    n = name.lower()
+    if "linear light" in n or "linearlight" in n:
+        # Linear light is dst + 2 * src - 1: add the part above mid grey, then subtract the part below it.
+        passes = [("Blend One One", "c.rgb = max(c.rgb * 2 - 1, 0) * c.a; c.a = 0;"),
+                  ("BlendOp RevSub\n\t\t\tBlend One One", "c.rgb = max(1 - c.rgb * 2, 0) * c.a; c.a = 0;")]
+    else:
+        passes = [(f"Blend {blend_for(name)}", "c.rgb *= c.a;")]
     tags = '"Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" "CanUseSpriteAtlas"="True"'
     colormask = "ColorMask [_ColorMask]" if "_ColorMask" in props else ""
     world = "float3 worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;" if sway else ""
+    pass_code = "\n".join(sprite_pass(b, f, decl, uv, tint, post, world, sway) for b, f in passes)
     return f"""	SubShader {{
 		Tags {{ {tags} }}
 		Cull Off
 		Lighting Off
 		ZWrite Off
-		Blend {blend}
 		{colormask}
 		{stencil_block(props)}
-		Pass {{
+{pass_code}
+	}}"""
+
+
+def sprite_pass(blend, final, decl, uv, tint, post, world, sway):
+    return f"""		Pass {{
+			{blend}
 			CGPROGRAM
 			#pragma vertex vert
 			#pragma fragment frag
@@ -217,12 +233,11 @@ def sprite_subshader(name, props):
 			{{
 				fixed4 c = tex2D(_MainTex, i.uv) * i.color;
 				{' '.join(post)}
-				c.rgb *= c.a;
+				{final}
 				return c;
 			}}
 			ENDCG
-		}}
-	}}"""
+		}}"""
 
 
 def passthrough_subshader():
@@ -274,6 +289,7 @@ def stencilwrite_subshader(props):
 
 def main():
     counts = {}
+    changed = 0
     tmp_dirs = set()
     for root, _, files in os.walk(ASSETS):
         for f in files:
@@ -281,7 +297,7 @@ def main():
                 continue
             path = os.path.join(root, f)
             text = open(path, encoding="utf-8", errors="ignore").read()
-            if "DummyShaderTextExporter" not in text:
+            if "DummyShaderTextExporter" not in text and not text.startswith(GENERATED):
                 continue
             m = re.search(r'Shader\s+"([^"]+)"', text)
             name = m.group(1)
@@ -307,14 +323,16 @@ def main():
                     kind, body = "stencilwrite", stencilwrite_subshader(props)
                 else:
                     kind, body = "sprite", sprite_subshader(name, props)
-                out = f'// iOS port: generated replacement for an AssetRipper dummy shader ({kind}).\nShader "{name}" {{{props_block}\n{body}\n\tFallback Off\n}}\n'
-                open(dest, "w", encoding="utf-8").write(out)
+                out = f'{GENERATED} ({kind}).\nShader "{name}" {{{props_block}\n{body}\n\tFallback Off\n}}\n'
+                if not os.path.exists(dest) or open(dest, encoding="utf-8").read() != out:
+                    open(dest, "w", encoding="utf-8").write(out)
+                    changed += 1
             counts[kind] = counts.get(kind, 0) + 1
 
     for d in tmp_dirs:  # TMP shaders include their .cginc files by relative path
         for inc in TMP_INCLUDES:
             shutil.copy(os.path.join(TMP, inc), os.path.join(OUT, d, inc))
-    print("generated:", counts, "tmp include dirs:", sorted(tmp_dirs))
+    print("generated:", counts, "changed:", changed, "tmp include dirs:", sorted(tmp_dirs))
 
 
 main()
