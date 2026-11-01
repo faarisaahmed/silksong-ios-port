@@ -39,6 +39,18 @@ namespace IOSPort
                 AddControl(button, button.ToString());
         }
 
+        // True when the touch controls are the only controller, so the controller menu says none is connected.
+        public static bool NoRealController
+        {
+            get
+            {
+                foreach (var device in InputManager.Devices)
+                    if (!(device is TouchGamepad) && device.IsAttached && !device.IsUnknown)
+                        return false;
+                return true;
+            }
+        }
+
         public void ReleaseAll()
         {
             held.Clear();

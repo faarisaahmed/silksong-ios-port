@@ -133,6 +133,12 @@ patch("PlatformVibrationHelper.cs", [
      "\tpublic void Destroy()\n\t{\n\t\tIOSPort.Rumble.Set(0f, 0f); // iOS port\n"),
 ])
 
+# The touch controls are a virtual controller, so the controller menu would always show one as connected.
+patch("ControllerDetect.cs", [
+    ("\t\tif (ih.gamepadState == GamepadState.DETACHED)\n",
+     "\t\tif (ih.gamepadState == GamepadState.DETACHED || IOSPort.TouchGamepad.NoRealController) // iOS port\n"),
+])
+
 
 # Controllers: the game pauses on Start, and Unity's iOS controller input has no fixed button number for the
 # second menu button (Xbox View, PlayStation Share/Create, MFi Options), so the unused ones all press Back,

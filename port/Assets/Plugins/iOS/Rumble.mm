@@ -2,8 +2,9 @@
 // or on a connected controller's motors. Used by IOSPort.Rumble.
 #import <CoreHaptics/CoreHaptics.h>
 #import <GameController/GameController.h>
+#import <QuartzCore/QuartzCore.h>
 
-// One haptic engine playing a looping continuous buzz whose strength is changed while it plays.
+// The phone: one haptic engine playing a looping continuous buzz whose strength is changed while it plays.
 @interface IOSPortBuzz : NSObject
 @property (nonatomic, strong) CHHapticEngine* engine;
 @property (nonatomic, strong) id<CHHapticAdvancedPatternPlayer> player;
@@ -71,18 +72,128 @@
 
 @end
 
+// Messages for IOSPort.Rumble to write to Documents/Logs/rumble.txt (there's no other way to see them on a phone).
+static NSMutableString* pendingLog;
+
+static void Log(NSString* message)
+{
+    NSLog(@"[IOSPort] rumble: %@", message);
+    if (pendingLog == nil)
+        pendingLog = [NSMutableString string];
+    if (pendingLog.length < 4000)
+        [pendingLog appendFormat:@"%@\n", message];
+}
+
+extern "C" char* IOSPortRumbleLog()
+{
+    if (pendingLog.length == 0)
+        return NULL;
+    const char* text = pendingLog.UTF8String;
+    char* copy = (char*)malloc(strlen(text) + 1); // freed by the IL2CPP marshaller
+    strcpy(copy, text);
+    [pendingLog setString:@""];
+    return copy;
+}
+
+// One motor (or the whole controller) of a game controller. Controllers get a short buzz at the current strength
+// a few times a second rather than one long buzz with its strength changed as it plays, which not every
+// controller's haptics support.
+@interface IOSPortMotor : NSObject
+@property (nonatomic, strong) CHHapticEngine* engine;
+@property (nonatomic, strong) id<CHHapticPatternPlayer> player;
+@property (nonatomic, copy) NSString* name;
+@property (nonatomic) float lastIntensity;
+@property (nonatomic) double lastStart;
+@property (nonatomic) BOOL started;
+@property (nonatomic) int failures;
+@end
+
+@implementation IOSPortMotor
+
+- (instancetype)initWithController:(GCController*)c locality:(GCHapticsLocality)locality
+{
+    if (!(self = [super init]))
+        return nil;
+    _name = [NSString stringWithFormat:@"%@ (%@)", c.vendorName, locality];
+    _engine = [c.haptics createEngineWithLocality:locality];
+    if (_engine == nil)
+    {
+        Log([NSString stringWithFormat:@"%@: no haptic engine", _name]);
+        return nil;
+    }
+    __weak IOSPortMotor* weakSelf = self;
+    _engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) { weakSelf.started = NO; };
+    _engine.resetHandler = ^{ weakSelf.started = NO; weakSelf.player = nil; };
+    Log([NSString stringWithFormat:@"%@: haptic engine ready", _name]);
+    return self;
+}
+
+- (void)stop
+{
+    if (_player != nil)
+        [_player stopAtTime:CHHapticTimeImmediate error:nil];
+    _player = nil;
+    _lastIntensity = 0;
+}
+
+- (void)setIntensity:(float)intensity sharpness:(float)sharpness
+{
+    if (_failures > 20)
+        return;
+    if (intensity <= 0.01f)
+    {
+        [self stop];
+        return;
+    }
+    double now = CACurrentMediaTime();
+    // A new buzz when the strength changes noticeably, or before the last one runs out.
+    if (_player != nil && fabsf(intensity - _lastIntensity) < 0.05f && now - _lastStart < 0.08)
+        return;
+    NSError* error = nil;
+    if (!_started)
+    {
+        if (![_engine startAndReturnError:&error])
+        {
+            _failures++;
+            Log([NSString stringWithFormat:@"%@: couldn't start: %@", _name, error]);
+            return;
+        }
+        _started = YES;
+    }
+    CHHapticEvent* buzz = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[
+        [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:fminf(intensity, 1)],
+        [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:sharpness],
+    ] relativeTime:0 duration:0.12];
+    CHHapticPattern* pattern = [[CHHapticPattern alloc] initWithEvents:@[buzz] parameters:@[] error:&error];
+    id<CHHapticPatternPlayer> player = pattern != nil ? [_engine createPlayerWithPattern:pattern error:&error] : nil;
+    if (player == nil || ![player startAtTime:CHHapticTimeImmediate error:&error])
+    {
+        _failures++;
+        _started = NO;
+        Log([NSString stringWithFormat:@"%@: couldn't play: %@", _name, error]);
+        return;
+    }
+    if (_player != nil)
+        [_player stopAtTime:CHHapticTimeImmediate error:nil];
+    _player = player;
+    _lastIntensity = intensity;
+    _lastStart = now;
+}
+
+@end
+
 static IOSPortBuzz* phoneBuzz;
 static BOOL phoneChecked;
-static __weak GCController* buzzController;
-static IOSPortBuzz* leftBuzz;   // the controller's large motor (or its only one)
-static IOSPortBuzz* rightBuzz;  // the small motor, when the controller has separate handles
+static __weak GCController* motorController;
+static IOSPortMotor* largeMotor; // the left handle, or the whole controller when it has no separate handles
+static IOSPortMotor* smallMotor; // the right handle
 
 static void StopController()
 {
-    [leftBuzz setIntensity:0 sharpness:0];
-    [rightBuzz setIntensity:0 sharpness:0];
-    leftBuzz = rightBuzz = nil;
-    buzzController = nil;
+    [largeMotor stop];
+    [smallMotor stop];
+    largeMotor = smallMotor = nil;
+    motorController = nil;
 }
 
 static GCController* CurrentController()
@@ -103,26 +214,38 @@ extern "C" void IOSPortRumble(float small, float large, int toController)
     {
         [phoneBuzz setIntensity:0 sharpness:0];
         GCController* c = CurrentController();
-        if (c != buzzController)
+        if (c != motorController)
         {
             StopController();
-            buzzController = c;
+            motorController = c;
+            if (c == nil)
+            {
+                static BOOL warned;
+                if (!warned)
+                    Log([NSString stringWithFormat:@"no controller with haptics (%lu connected)", (unsigned long)GCController.controllers.count]);
+                warned = YES;
+                return;
+            }
             NSSet<GCHapticsLocality>* where = c.haptics.supportedLocalities;
+            Log([NSString stringWithFormat:@"%@ (%@): haptics at %@", c.vendorName, c.productCategory, [where.allObjects componentsJoinedByString:@", "]]);
             if ([where containsObject:GCHapticsLocalityLeftHandle] && [where containsObject:GCHapticsLocalityRightHandle])
             {
-                leftBuzz = [[IOSPortBuzz alloc] initWithEngine:[c.haptics createEngineWithLocality:GCHapticsLocalityLeftHandle]];
-                rightBuzz = [[IOSPortBuzz alloc] initWithEngine:[c.haptics createEngineWithLocality:GCHapticsLocalityRightHandle]];
+                largeMotor = [[IOSPortMotor alloc] initWithController:c locality:GCHapticsLocalityLeftHandle];
+                smallMotor = [[IOSPortMotor alloc] initWithController:c locality:GCHapticsLocalityRightHandle];
             }
-            else if (c != nil)
-                leftBuzz = [[IOSPortBuzz alloc] initWithEngine:[c.haptics createEngineWithLocality:GCHapticsLocalityDefault]];
+            if (largeMotor == nil || smallMotor == nil)
+            {
+                smallMotor = nil;
+                largeMotor = [[IOSPortMotor alloc] initWithController:c locality:GCHapticsLocalityDefault];
+            }
         }
-        if (rightBuzz != nil)
+        if (smallMotor != nil)
         {
-            [leftBuzz setIntensity:large sharpness:-0.3f];
-            [rightBuzz setIntensity:small sharpness:0.3f];
+            [largeMotor setIntensity:large sharpness:0.2f];
+            [smallMotor setIntensity:small sharpness:0.8f];
         }
         else
-            [leftBuzz setIntensity:fmaxf(small, large) sharpness:0];
+            [largeMotor setIntensity:fmaxf(small, large) sharpness:0.5f];
         return;
     }
     StopController();
@@ -134,7 +257,7 @@ extern "C" void IOSPortRumble(float small, float large, int toController)
             NSError* error = nil;
             phoneBuzz = [[IOSPortBuzz alloc] initWithEngine:[[CHHapticEngine alloc] initAndReturnError:&error]];
             if (phoneBuzz == nil)
-                NSLog(@"[IOSPort] rumble: no haptic engine: %@", error);
+                Log([NSString stringWithFormat:@"no haptic engine: %@", error]);
         }
     }
     // The large motor is the heavy, low rumble; the small one is the light buzz.

@@ -31,7 +31,9 @@ namespace IOSPort
         }
 
         // Whispering Vaults, at the lever door next to the Grand Bellway exit.
-        public static void WarpToVaultsDoor()
+        public static void WarpToVaultsDoor() => WarpTo("Library_11", "left2");
+
+        public static void WarpTo(string scene, string gate)
         {
             var gm = GameManager.UnsafeInstance;
             if (gm == null || HeroController.UnsafeInstance == null)
@@ -39,8 +41,8 @@ namespace IOSPort
             instance?.SetNoclip(false);
             gm.BeginSceneTransition(new GameManager.SceneLoadInfo
             {
-                SceneName = "Library_11",
-                EntryGateName = "left2",
+                SceneName = scene,
+                EntryGateName = gate,
                 Visualization = GameManager.SceneLoadVisualizations.Default,
             });
         }

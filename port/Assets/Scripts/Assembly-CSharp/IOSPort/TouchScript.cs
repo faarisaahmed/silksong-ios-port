@@ -9,7 +9,7 @@ namespace IOSPort
     // the touch HUD in the Simulator. Lines: "<seconds after gameplay starts> down <finger> <x> <y>",
     // "<seconds> up <finger>" or "<seconds> shot <name>" (x/y are safe-area fractions, 0,0 = bottom left).
     // "sdown" takes whole-screen fractions instead; "press <InputControlType>" / "release" hold a virtual
-    // controller button; "export" runs EXPORT SAVES; "noclip" and "warp" press the DebugTools buttons, "gates" logs the room's gates; "kill" deals Hornet lethal damage (to check the death effect). A first line of "title"
+    // controller button; "export" runs EXPORT SAVES; "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates; "kill" deals Hornet lethal damage (to check the death effect). A first line of "title"
     // starts the clock on the title screen instead of in gameplay.
     public class TouchScript : MonoBehaviour
     {
@@ -61,6 +61,8 @@ namespace IOSPort
                     SaveExport.Export();
                 else if (p[1] == "noclip")
                     DebugTools.ToggleNoclip();
+                else if (p[1] == "warp" && p.Length >= 4)
+                    DebugTools.WarpTo(p[2], p[3]);
                 else if (p[1] == "warp")
                     DebugTools.WarpToVaultsDoor();
                 else if (p[1] == "gates")

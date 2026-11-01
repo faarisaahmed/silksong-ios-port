@@ -27,8 +27,8 @@ ASSETS, OUT, TMP = sys.argv[1:4]
 GENERATED = "// iOS port: generated replacement for an AssetRipper dummy shader"
 
 PASSTHROUGH = {
-    "Hidden/UberPostprocess", "ImageEffects/Deband", "Custom/Brightness Effect",
-    "Custom/Contrast Effect", "Custom/Screen-Space Blit", "Hidden/NoiseAndGrain",
+    "ImageEffects/Deband", "Custom/Brightness Effect",
+    "Custom/Contrast Effect", "Hidden/NoiseAndGrain",
 }
 
 # Image effects reimplemented from their published behaviour (Unity Standard Assets) or from the script using them.
@@ -55,6 +55,65 @@ SPECIAL = {
 				color.rgb = lerp(fixed3(lum, lum, lum), color.rgb, _Saturation);
 				return color;
 			}
+			ENDCG
+		}
+	}""",
+    # The camera's combined post-process (UberPostprocess.cs): each module script that's enabled turns on its keyword
+    # and sets its values. Colour curves (per-area colour grading) are the same as ColorCorrectionCurvesSimple;
+    # brightness/contrast come from the game's brightness setting and fades. The film grain is left out.
+    "Hidden/UberPostprocess": """	SubShader {
+		Pass {
+			ZTest Always Cull Off ZWrite Off
+			CGPROGRAM
+			#pragma vertex vert_img
+			#pragma fragment frag
+			#pragma multi_compile __ COLOR_CURVES_ENABLED
+			#pragma multi_compile __ BRIGHTNESS_EFFECT_ENABLED
+			#include "UnityCG.cginc"
+			sampler2D _MainTex;
+			sampler2D _RgbTex;
+			float _Saturation;
+			float _Brightness;
+			float _Contrast;
+			float4 frag(v2f_img i) : SV_Target
+			{
+				float4 color = tex2D(_MainTex, i.uv);
+			#if COLOR_CURVES_ENABLED
+				float3 c = saturate(color.rgb);
+				float3 graded = float3(tex2D(_RgbTex, float2(c.r, 0.5 / 4.0)).r, tex2D(_RgbTex, float2(c.g, 1.5 / 4.0)).g,
+					tex2D(_RgbTex, float2(c.b, 2.5 / 4.0)).b);
+				float lum = Luminance(graded);
+				color.rgb = lerp(float3(lum, lum, lum), graded, _Saturation);
+			#endif
+			#if BRIGHTNESS_EFFECT_ENABLED
+				color.rgb *= _Brightness;
+				color.rgb = (color.rgb - 0.5) * _Contrast + 0.5;
+			#endif
+				return color;
+			}
+			ENDCG
+		}
+	}""",
+    # The far background (LightBlurredBackground.cs): a second camera renders everything behind the closest blur plane
+    # into a texture, which is blurred and then drawn on that plane in screen space, so it lines up with the view.
+    "Custom/Screen-Space Blit": """	SubShader {
+		Tags { "Queue"="Transparent" "RenderType"="Transparent" "IgnoreProjector"="True" }
+		Pass {
+			Cull Off ZWrite Off Blend Off
+			CGPROGRAM
+			#pragma vertex vert
+			#pragma fragment frag
+			#include "UnityCG.cginc"
+			sampler2D _MainTex;
+			struct v2f { float4 pos : SV_POSITION; float4 screen : TEXCOORD0; };
+			v2f vert(appdata_base v)
+			{
+				v2f o;
+				o.pos = UnityObjectToClipPos(v.vertex);
+				o.screen = ComputeScreenPos(o.pos);
+				return o;
+			}
+			fixed4 frag(v2f i) : SV_Target { return tex2D(_MainTex, i.screen.xy / i.screen.w); }
 			ENDCG
 		}
 	}""",
