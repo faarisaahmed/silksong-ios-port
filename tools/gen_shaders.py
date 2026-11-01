@@ -10,6 +10,7 @@ keep their values) and writes a real SubShader chosen by category:
   stencilwrite -> writes the stencil only
   sprite       -> premultiplied alpha sprite with tint, flash, desaturation, UV scrolling,
                   blend mode and stencil support where the material has those properties
+                  (the tiled rain, the scrolling fog and the darkness and its cutouts get their own versions)
 
 Shaders it generated before are regenerated too, so it can be run again after changes here.
 Files are only rewritten when their contents change (so Unity doesn't reimport them).
@@ -96,8 +97,9 @@ SPECIAL = {
 	}""",
     # The far background (LightBlurredBackground.cs): a second camera renders everything behind the closest blur plane
     # into a texture, which is blurred and then drawn on that plane in screen space, so it lines up with the view.
+    # Drawn before every sprite (as the stand-in used to be), or sprite sorting can put it over the scene.
     "Custom/Screen-Space Blit": """	SubShader {
-		Tags { "Queue"="Transparent" "RenderType"="Transparent" "IgnoreProjector"="True" }
+		Tags { "Queue"="Background" "RenderType"="Opaque" "IgnoreProjector"="True" }
 		Pass {
 			Cull Off ZWrite Off Blend Off
 			CGPROGRAM
@@ -200,6 +202,70 @@ SPECIAL = {
 			#pragma fragment fragV
 			ENDCG }
 	}""",
+    # Full-screen blur that some rooms fade in (CameraBlurPlane.cs): pass 0 copies, passes 1-4 blur horizontally and
+    # vertically in turn, and the last one adds _Vibrancy (saturation). With USE_MASK the blur follows a vignette
+    # (_Mask, positioned on Hornet by _Mask_ST), so the middle of the screen stays sharp.
+    "UI/Blur/UIBlur Camera": """	CGINCLUDE
+		#include "UnityCG.cginc"
+		sampler2D _MainTex;
+		float4 _MainTex_TexelSize;
+		sampler2D _Mask;
+		float4 _Mask_ST;
+		half _Size;
+		half _Vibrancy;
+		half _MaskLerp;
+		static const half curve[7] = { 0.0205, 0.0855, 0.232, 0.324, 0.232, 0.0855, 0.0205 };
+		fixed4 blur(float2 uv, float2 dir)
+		{
+			half size = _Size;
+		#ifdef USE_MASK
+			size *= lerp(1, tex2D(_Mask, saturate(uv * _Mask_ST.xy + _Mask_ST.zw)).r, _MaskLerp);
+		#endif
+			float2 step = dir * _MainTex_TexelSize.xy * size;
+			fixed4 c = 0;
+			for (int l = 0; l < 7; l++)
+				c += tex2D(_MainTex, uv + step * (l - 3)) * curve[l];
+			return c;
+		}
+		fixed4 fragCopy(v2f_img i) : SV_Target { return tex2D(_MainTex, i.uv); }
+		fixed4 fragH(v2f_img i) : SV_Target { return blur(i.uv, float2(1, 0)); }
+		fixed4 fragV(v2f_img i) : SV_Target { return blur(i.uv, float2(0, 1)); }
+		fixed4 fragLast(v2f_img i) : SV_Target
+		{
+			fixed4 c = blur(i.uv, float2(0, 1));
+			fixed lum = Luminance(c.rgb);
+			c.rgb = lerp(fixed3(lum, lum, lum), c.rgb, 1 + _Vibrancy);
+			return c;
+		}
+	ENDCG
+	SubShader {
+		ZTest Always Cull Off ZWrite Off Blend Off
+		Pass { CGPROGRAM
+			#pragma vertex vert_img
+			#pragma multi_compile __ USE_MASK
+			#pragma fragment fragCopy
+			ENDCG }
+		Pass { CGPROGRAM
+			#pragma vertex vert_img
+			#pragma multi_compile __ USE_MASK
+			#pragma fragment fragH
+			ENDCG }
+		Pass { CGPROGRAM
+			#pragma vertex vert_img
+			#pragma multi_compile __ USE_MASK
+			#pragma fragment fragV
+			ENDCG }
+		Pass { CGPROGRAM
+			#pragma vertex vert_img
+			#pragma multi_compile __ USE_MASK
+			#pragma fragment fragH
+			ENDCG }
+		Pass { CGPROGRAM
+			#pragma vertex vert_img
+			#pragma multi_compile __ USE_MASK
+			#pragma fragment fragLast
+			ENDCG }
+	}""",
 }
 HIDDEN = {
     "Custom/Heat Effect", "Custom/Heat Effect (Masked)", "Custom/Sprites-Refraction",
@@ -241,7 +307,206 @@ def stencil_block(props):
     return ""
 
 
+def tiled_masked_subshader(props):
+    # Sprites/Tiled (Scrolling) Masked, e.g. the rain in front of the camera: _ScrollTex tiles in world space (scaled by
+    # its tiling, scrolling at _SpeedX/Y), and the sprite itself (usually a soft white blob) only fades it out at the edges.
+    scroll = "p += float2(_SpeedX, _SpeedY) * _Time.y;" if "_SpeedX" in props and "_SpeedY" in props else ""
+    speed = "float _SpeedX; float _SpeedY;" if scroll else ""
+    offsets = "float _WorldOffsetZ;" if "_WorldOffsetZ" in props else ""
+    depth = "p.x += worldPos.z * _WorldOffsetZ;" if offsets else ""
+    return f"""	SubShader {{
+		Tags {{ "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" }}
+		Cull Off
+		Lighting Off
+		ZWrite Off
+		Pass {{
+			Blend One OneMinusSrcAlpha
+			CGPROGRAM
+			#pragma vertex vert
+			#pragma fragment frag
+			#include "UnityCG.cginc"
+			sampler2D _MainTex;
+			float4 _MainTex_ST;
+			sampler2D _ScrollTex;
+			float4 _ScrollTex_ST;
+			fixed4 _Color;
+			{speed} {offsets}
+			struct appdata {{ float4 vertex : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; }};
+			struct v2f {{ float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; float2 scroll : TEXCOORD1; }};
+			v2f vert(appdata v)
+			{{
+				v2f o;
+				float3 worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;
+				o.pos = UnityObjectToClipPos(v.vertex);
+				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+				float2 p = worldPos.xy;
+				{scroll}
+				{depth}
+				o.scroll = p * _ScrollTex_ST.xy + _ScrollTex_ST.zw;
+				o.color = v.color * _Color;
+				return o;
+			}}
+			fixed4 frag(v2f i) : SV_Target
+			{{
+				fixed4 c = tex2D(_ScrollTex, i.scroll) * i.color;
+				c.a *= tex2D(_MainTex, i.uv).a;
+				c.rgb *= c.a;
+				return c;
+			}}
+			ENDCG
+		}}
+	}}"""
+
+
+def fog_subshader():
+    # Custom/Tiled Scrolling Fog: the fog texture scrolls at _SpeedX/Y; with USE_HERO_MASK it thins out around Hornet
+    # (_HeroWorldPos, set by SetGlobalShaderPos on her) following _HeroMaskTex, a vignette laid over the screen.
+    return """	SubShader {
+		Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" }
+		Cull Off
+		Lighting Off
+		ZWrite Off
+		Pass {
+			Blend One OneMinusSrcAlpha
+			CGPROGRAM
+			#pragma vertex vert
+			#pragma fragment frag
+			#pragma multi_compile __ USE_HERO_MASK
+			#include "UnityCG.cginc"
+			sampler2D _MainTex;
+			float4 _MainTex_ST;
+			sampler2D _HeroMaskTex;
+			float4 _HeroMaskTex_ST;
+			fixed4 _Color;
+			float _SpeedX; float _SpeedY;
+			float4 _HeroWorldPos;
+			struct appdata { float4 vertex : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; };
+			struct v2f { float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; float4 screen : TEXCOORD1; float4 hero : TEXCOORD2; };
+			v2f vert(appdata v)
+			{
+				v2f o;
+				o.pos = UnityObjectToClipPos(v.vertex);
+				o.uv = TRANSFORM_TEX(v.uv, _MainTex) + float2(_SpeedX, _SpeedY) * _Time.y;
+				o.screen = ComputeScreenPos(o.pos);
+				o.hero = ComputeScreenPos(mul(UNITY_MATRIX_VP, float4(_HeroWorldPos.xyz, 1)));
+				o.color = v.color * _Color;
+				return o;
+			}
+			fixed4 frag(v2f i) : SV_Target
+			{
+				fixed4 c = tex2D(_MainTex, i.uv) * i.color;
+			#ifdef USE_HERO_MASK
+				float2 around = i.screen.xy / i.screen.w - i.hero.xy / i.hero.w + 0.5;
+				c.a *= tex2D(_HeroMaskTex, TRANSFORM_TEX(around, _HeroMaskTex)).r;
+			#endif
+				c.rgb *= c.a;
+				return c;
+			}
+			ENDCG
+		}
+	}"""
+
+
+def darkness_subshader():
+    # Sprites/Darkness Sprite (the vignette and the blackout over hidden areas): a second camera (DarknessCameraEffect.cs)
+    # draws cutout sprites into _DarknessCutout, red for the vignette and blue where a hidden area is uncovered, and
+    # the darkness turns see-through where its channel is set. The scene border is left as a plain sprite.
+    return """	SubShader {
+		Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" }
+		Cull Off
+		Lighting Off
+		ZWrite Off
+		Pass {
+			Blend One OneMinusSrcAlpha
+			CGPROGRAM
+			#pragma vertex vert
+			#pragma fragment frag
+			#pragma multi_compile __ IS_VIGNETTE IS_MASK_BLACKOUT
+			#include "UnityCG.cginc"
+			sampler2D _MainTex;
+			float4 _MainTex_ST;
+			sampler2D _DarknessCutout;
+			fixed4 _Color;
+			struct appdata { float4 vertex : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; };
+			struct v2f { float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; float4 cut : TEXCOORD1; };
+			v2f vert(appdata v)
+			{
+				v2f o;
+				o.pos = UnityObjectToClipPos(v.vertex);
+				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+				o.cut = ComputeScreenPos(o.pos); // the darkness camera has the same view as this one
+				o.color = v.color * _Color;
+				return o;
+			}
+			fixed4 frag(v2f i) : SV_Target
+			{
+				fixed4 c = tex2D(_MainTex, i.uv) * i.color;
+			#if defined(IS_VIGNETTE) || defined(IS_MASK_BLACKOUT)
+				fixed4 cut = tex2D(_DarknessCutout, i.cut.xy / i.cut.w);
+			#endif
+			#ifdef IS_VIGNETTE
+				c.a *= 1 - cut.r;
+			#endif
+			#ifdef IS_MASK_BLACKOUT
+				c.a *= 1 - cut.b;
+			#endif
+				c.rgb *= c.a;
+				return c;
+			}
+			ENDCG
+		}
+	}"""
+
+
+def mix_channels_subshader():
+    # Sprites/Default Mix Channels: the cutout sprites drawn into the darkness texture (see darkness_subshader). Each one
+    # sets only its own channels (red for the vignette, blue for an uncovered hidden area; black ones set alpha, the
+    # scene border's channel), so they combine by taking the maximum instead of covering each other.
+    return """	SubShader {
+		Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" }
+		Cull Off
+		Lighting Off
+		ZWrite Off
+		Pass {
+			BlendOp Max
+			Blend One One
+			CGPROGRAM
+			#pragma vertex vert
+			#pragma fragment frag
+			#include "UnityCG.cginc"
+			sampler2D _MainTex;
+			float4 _MainTex_ST;
+			fixed4 _Color;
+			struct appdata { float4 vertex : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; };
+			struct v2f { float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; };
+			v2f vert(appdata v)
+			{
+				v2f o;
+				o.pos = UnityObjectToClipPos(v.vertex);
+				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+				o.color = v.color * _Color;
+				return o;
+			}
+			fixed4 frag(v2f i) : SV_Target
+			{
+				fixed strength = tex2D(_MainTex, i.uv).a * i.color.a;
+				fixed3 rgb = i.color.rgb;
+				return fixed4(rgb * strength, strength * (1 - max(rgb.r, max(rgb.g, rgb.b))));
+			}
+			ENDCG
+		}
+	}"""
+
+
 def sprite_subshader(name, props):
+    if name == "Sprites/Darkness Sprite":
+        return darkness_subshader()
+    if name == "Sprites/Default Mix Channels":
+        return mix_channels_subshader()
+    if "_ScrollTex" in props and "tiled" in name.lower() and "masked" in name.lower():
+        return tiled_masked_subshader(props)
+    if name == "Custom/Tiled Scrolling Fog":
+        return fog_subshader()
     decl, uv, tint, post = [], [], [], []
     if "_Color" in props:
         decl.append("fixed4 _Color;")
