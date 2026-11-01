@@ -218,6 +218,7 @@ If a mod mostly works but one feature doesn't, it's usually one of these.
 
 - Touch controls with a joystick, d-pad or arrow keys (pick in the settings panel). They hide while you use a controller.
 - Controllers (Xbox, PlayStation, MFi) work, including the inventory and pause buttons.
+- Rumble: on the controller when you're using one, otherwise the phone vibrates. The game's Controller Rumble setting turns it down or off.
 - A settings panel (the gear on the title screen) for touch controls, screen width (full width or 16:9 like PC), render scale and other performance options.
 - Automatic save backups in `SaveBackups/`, and an **Export saves** button that zips your saves to share or keep in iCloud.
 - Saves and mod files visible in the Files app.
@@ -280,7 +281,7 @@ Delete `work-old` once the new one builds. Mods may need updating for a new game
 | `setup` | One-time setup: game files to Unity project to first IPA |
 | `build` | Builds an IPA with the mods in `BepInEx/` |
 | `port/` | The port itself: iPhone code, touch controls, editor build scripts, iOS plugins, art. Copied into the Unity project by setup. |
-| `tools/patch_game.py` | The small edits made to the game's own scripts (online features off, controller fixes, save location, screen width) |
+| `tools/patch_game.py` | The small edits made to the game's own scripts (online features off, controller fixes, rumble, save location, screen width) |
 | `tools/update_project.sh` | Brings an already set up project up to date with fixes in this repo (setup and build both run it) |
 | `tools/make_addressables_map.py` | Rebuilds the game's asset bundle layout for iOS from the PC game's catalog |
 | `tools/gen_shaders.py` | Replaces the empty shaders AssetRipper exports with working ones |

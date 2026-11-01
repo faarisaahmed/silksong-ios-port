@@ -123,6 +123,16 @@ patch("Gate.cs", [
      "\t\t\tanimator.enabled = true;\n\t\t\tanimator.Rebind(); // iOS port: see patch_game.py\n\t\t\tanimator.Play(closeAnim);"),
 ])
 
+# Rumble: Unity can't rumble controllers on iOS, so the mixed motor strengths also go to IOSPort.Rumble
+# (controller haptics, or the phone's while using the touch controls).
+patch("PlatformVibrationHelper.cs", [
+    ("\t\tGamepadVibrationMixer.GamepadVibrationEmission.Values currentValues = vibrationMixer.CurrentValues;\n",
+     "\t\tGamepadVibrationMixer.GamepadVibrationEmission.Values currentValues = vibrationMixer.CurrentValues;\n"
+     "\t\tIOSPort.Rumble.Set(currentValues.Small, currentValues.Large); // iOS port\n"),
+    ("\tpublic void Destroy()\n\t{\n",
+     "\tpublic void Destroy()\n\t{\n\t\tIOSPort.Rumble.Set(0f, 0f); // iOS port\n"),
+])
+
 
 # Controllers: the game pauses on Start, and Unity's iOS controller input has no fixed button number for the
 # second menu button (Xbox View, PlayStation Share/Create, MFi Options), so the unused ones all press Back,

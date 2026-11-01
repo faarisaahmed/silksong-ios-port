@@ -173,6 +173,15 @@ namespace IOSPort
             plist.root.SetBoolean("UIRequiresFullScreen", true);
             plist.WriteToFile(plistPath);
 
+            // Plugins/iOS/Rumble.mm.
+            string projectPath = PBXProject.GetPBXProjectPath(path);
+            var project = new PBXProject();
+            project.ReadFromFile(projectPath);
+            string framework = project.GetUnityFrameworkTargetGuid();
+            project.AddFrameworkToProject(framework, "CoreHaptics.framework", false);
+            project.AddFrameworkToProject(framework, "GameController.framework", false);
+            project.WriteToFile(projectPath);
+
             // The game's V-Sync On and Frame Rate Cap Off both mean "no cap" (-1), which iOS turns into 30 fps.
             // Run at the screen's rate instead, like V-Sync on PC.
             string renderingPath = Path.Combine(path, "Classes/UnityAppController+Rendering.mm");
