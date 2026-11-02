@@ -91,6 +91,10 @@ namespace IOSPort
             PlayerSettings.SetScriptingBackend(ios, ScriptingImplementation.IL2CPP);
             // PlayMaker and the game resolve many types by reflection, so keep stripping minimal.
             PlayerSettings.SetManagedStrippingLevel(ios, ManagedStrippingLevel.Minimal);
+            // With incremental GC off (the game ships with it off), players compiled by Xcode 26 break reflection:
+            // Newtonsoft.Json can't read PlayerData and the title screen comes up empty. Unity's issue tracker:
+            // "[iOS] Stripping issue on Xcode 26 when "Use incremental GC" is disabled".
+            PlayerSettings.gcIncremental = true;
             PlayerSettings.SetArchitecture(ios, 1); // ARM64
             PlayerSettings.iOS.sdkVersion = Simulator ? iOSSdkVersion.SimulatorSDK : iOSSdkVersion.DeviceSDK;
             PlayerSettings.iOS.simulatorSdkArchitecture = AppleMobileArchitectureSimulator.ARM64;

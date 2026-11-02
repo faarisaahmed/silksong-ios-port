@@ -37,7 +37,8 @@ EOF
 # player build and native plugins go straight into the Xcode project, so changes to them don't need the asset
 # rebuild; editor scripts and art do.
 out=$(python3 -I $HERE/tools/patch_game.py $PROJECT/Assets) || { echo "$out"; exit 1; }
-if [[ -n $(rsync -a --itemize-changes $HERE/port/Assets/ $PROJECT/Assets/ | grep '^>f' | grep -v -E ' (Scripts/.*\.cs|Plugins/iOS/.*)$') ]]; then changed=1; fi
+# --checksum: a fresh clone or a copied project has new file dates, which alone shouldn't cost an asset rebuild.
+if [[ -n $(rsync -a --checksum --itemize-changes $HERE/port/Assets/ $PROJECT/Assets/ | grep '^>f' | grep -v -E ' (Scripts/.*\.cs|Plugins/iOS/.*)$') ]]; then changed=1; fi
 
 # Shader replacements.
 out=$(python3 -I $HERE/tools/gen_shaders.py $PROJECT/Assets $PROJECT/Assets $WORK/tmp_shaders)
