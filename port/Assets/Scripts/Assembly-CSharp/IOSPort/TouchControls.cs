@@ -982,6 +982,7 @@ namespace IOSPort
                 (() => PerformanceSettings.ScaleLabel, PerformanceSettings.CycleScale),
                 (() => PerformanceSettings.EffectsLabel, PerformanceSettings.ToggleEffects),
                 (() => SaveExport.Label, SaveExport.Export),
+                (() => SaveImport.Label, SaveImport.Import),
                 (() => remapping ? "BACK TO LAYOUT EDITING" : "EDIT BUTTON LAYOUT", () => { settingsOpen = false; if (!remapping) StartRemap(); }),
                 (() => "CLOSE", () => settingsOpen = false),
             };

@@ -16,6 +16,8 @@ namespace IOSPort
             InputControlType.LeftStickButton, InputControlType.RightStickButton,
             InputControlType.DPadUp, InputControlType.DPadDown, InputControlType.DPadLeft, InputControlType.DPadRight,
             InputControlType.View, InputControlType.Back, InputControlType.Menu, InputControlType.Start, InputControlType.Select,
+            // The menu buttons other controller types use, for when one of those is the active controller type.
+            InputControlType.Share, InputControlType.Create, InputControlType.Options, InputControlType.Minus, InputControlType.Plus,
         };
 
         readonly HashSet<InputControlType> held = new HashSet<InputControlType>();

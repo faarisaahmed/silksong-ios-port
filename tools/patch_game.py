@@ -72,6 +72,12 @@ patch("InputHandler.cs", [
      "Application.platform == RuntimePlatform.LinuxPlayer || Application.platform == RuntimePlatform.LinuxEditor || Application.platform == RuntimePlatform.IPhonePlayer)\n\t\t{\n\t\t\tswitch (inputDevice.DeviceStyle)"),
     ("if (InputManager.EnableXInput || InputManager.NativeInputEnableXInput)",
      "if ((InputManager.EnableXInput || InputManager.NativeInputEnableXInput) && Application.platform != RuntimePlatform.IPhonePlayer)"),
+    # Every controller's menu buttons open the inventory and pause (see IOSPort.ControllerMenuButtons).
+    ("\tpublic void MapControllerButtons(GamepadType gamePadType)\n\t{\n",
+     "\tpublic void MapControllerButtons(GamepadType gamePadType)\n\t{\n"
+     "\t\tMapControllerButtonsGame(gamePadType);\n"
+     "\t\tIOSPort.ControllerMenuButtons.Add(inputActions, gamePadType); // iOS port\n\t}\n\n"
+     "\tprivate void MapControllerButtonsGame(GamepadType gamePadType)\n\t{\n"),
 ])
 
 # Hide menu options that do nothing on iPhone (PerformanceSettings decides which).

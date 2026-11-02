@@ -9,7 +9,7 @@ namespace IOSPort
     // the touch HUD in the Simulator. Lines: "<seconds after gameplay starts> down <finger> <x> <y>",
     // "<seconds> up <finger>" or "<seconds> shot <name>" (x/y are safe-area fractions, 0,0 = bottom left).
     // "sdown" takes whole-screen fractions instead; "press <InputControlType>" / "release" hold a virtual
-    // controller button; "export" runs EXPORT SAVES; "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates; "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility and "silk" fills the silk spool. A first line of "title"
+    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates; "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility and "silk" fills the silk spool. A first line of "title"
     // starts the clock on the title screen instead of in gameplay.
     public class TouchScript : MonoBehaviour
     {
@@ -63,6 +63,14 @@ namespace IOSPort
                     HeroController.instance.AddSilk(PlayerData.instance.CurrentSilkMax, false);
                 else if (p[1] == "export")
                     SaveExport.Export();
+                else if (p[1] == "import" && p.Length >= 3)
+                    SaveImport.ImportFiles(System.Linq.Enumerable.ToList(System.Linq.Enumerable.Select(System.Linq.Enumerable.Skip(p, 2), f => Path.Combine(Application.persistentDataPath, f))));
+                else if (p[1] == "pad" && p.Length >= 3)
+                    TestPad.Add(p[2]);
+                else if (p[1] == "padpress" && p.Length >= 3)
+                    TestPad.Set(p[2], true);
+                else if (p[1] == "padrelease" && p.Length >= 3)
+                    TestPad.Set(p[2], false);
                 else if (p[1] == "noclip")
                     DebugTools.ToggleNoclip();
                 else if (p[1] == "warp" && p.Length >= 4)
@@ -87,7 +95,9 @@ namespace IOSPort
                         + " gameState=" + gm?.GameState + " paused=" + gm?.isPaused
                         + " inventory=" + (PlayerData.instance != null && PlayerData.instance.isInventoryOpen)
                         + " acceptingInput=" + (handler != null && handler.acceptingInput)
-                        + " pauseBinding=" + (handler != null ? string.Join(",", System.Linq.Enumerable.Select(handler.inputActions.Pause.Bindings, b => b.ToString())) : ""));
+                        + " pauseBinding=" + (handler != null ? string.Join(",", System.Linq.Enumerable.Select(handler.inputActions.Pause.Bindings, b => b.ToString())) : "")
+                        + " inventoryBinding=" + (handler != null ? string.Join(",", System.Linq.Enumerable.Select(handler.inputActions.OpenInventory.Bindings, b => b.ToString())) : "")
+                        + " gamepadType=" + handler?.activeGamepadType + " style=" + InControl.InputManager.ActiveDevice?.DeviceStyle);
                 }
                 else if (p[1] == "cams")
                     LogCameras();
@@ -119,6 +129,32 @@ namespace IOSPort
                     // On iOS the path is taken relative to the app's Documents folder.
                     ScreenCapture.CaptureScreenshot("touchtest_" + p[2] + ".png");
                 Debug.Log("[IOSPort] touch script: " + line);
+            }
+        }
+
+        // Fake Input System controller, to check how the game maps each controller type's buttons.
+        static class TestPad
+        {
+            static UnityEngine.InputSystem.InputDevice pad;
+
+            public static void Add(string layout)
+            {
+                if (pad != null)
+                    UnityEngine.InputSystem.InputSystem.RemoveDevice(pad);
+                pad = UnityEngine.InputSystem.InputSystem.AddDevice(layout);
+                Debug.Log("[IOSPort] test pad: " + pad.layout + " \"" + pad.displayName + "\"");
+            }
+
+            public static void Set(string control, bool down)
+            {
+                var button = pad?[control] as UnityEngine.InputSystem.Controls.ButtonControl;
+                if (button == null)
+                    return;
+                using (UnityEngine.InputSystem.LowLevel.StateEvent.From(pad, out var ptr))
+                {
+                    UnityEngine.InputSystem.InputControlExtensions.WriteValueIntoEvent(button, down ? 1f : 0f, ptr);
+                    UnityEngine.InputSystem.InputSystem.QueueEvent(ptr);
+                }
             }
         }
 
