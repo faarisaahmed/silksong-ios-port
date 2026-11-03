@@ -314,8 +314,16 @@ def tiled_masked_subshader(props):
     speed = "float _SpeedX; float _SpeedY;" if scroll else ""
     offsets = "float _WorldOffsetZ;" if "_WorldOffsetZ" in props else ""
     depth = "p.x += worldPos.z * _WorldOffsetZ;" if offsets else ""
+    # The updrafts set LOCAL_SPACE_X: their texture is clamped across, so it has to be laid out across the sprite itself.
+    local = ""
+    if "_UseLocalSpaceX" in props:
+        local += "\n\t\t\t\t#ifdef LOCAL_SPACE_X\n\t\t\t\tp.x = v.vertex.x;\n\t\t\t\t#endif"
+    if "_UseLocalSpaceY" in props:
+        local += "\n\t\t\t\t#ifdef LOCAL_SPACE_Y\n\t\t\t\tp.y = v.vertex.y;\n\t\t\t\t#endif"
+    keywords = ("\n\t\t\t#pragma shader_feature_local LOCAL_SPACE_X" if "_UseLocalSpaceX" in props else "") + \
+        ("\n\t\t\t#pragma shader_feature_local LOCAL_SPACE_Y" if "_UseLocalSpaceY" in props else "")
     return f"""	SubShader {{
-		Tags {{ "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" }}
+		Tags {{ "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" "DisableBatching"="True" }}
 		Cull Off
 		Lighting Off
 		ZWrite Off
@@ -323,7 +331,7 @@ def tiled_masked_subshader(props):
 			Blend One OneMinusSrcAlpha
 			CGPROGRAM
 			#pragma vertex vert
-			#pragma fragment frag
+			#pragma fragment frag{keywords}
 			#include "UnityCG.cginc"
 			sampler2D _MainTex;
 			float4 _MainTex_ST;
@@ -339,7 +347,7 @@ def tiled_masked_subshader(props):
 				float3 worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;
 				o.pos = UnityObjectToClipPos(v.vertex);
 				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
-				float2 p = worldPos.xy;
+				float2 p = worldPos.xy;{local}
 				{scroll}
 				{depth}
 				o.scroll = p * _ScrollTex_ST.xy + _ScrollTex_ST.zw;
@@ -359,7 +367,8 @@ def tiled_masked_subshader(props):
 
 
 def fog_subshader():
-    # Custom/Tiled Scrolling Fog: the fog texture scrolls at _SpeedX/Y; with USE_HERO_MASK it thins out around Hornet
+    # Custom/Tiled Scrolling Fog: the fog texture scrolls at _SpeedX/Y texture widths per 20 seconds (_Time.x; the
+    # speeds go up to about 6, and per second the fog races and flickers); with USE_HERO_MASK it thins out around Hornet
     # (_HeroWorldPos, set by SetGlobalShaderPos on her) following _HeroMaskTex, a vignette laid over the screen.
     return """	SubShader {
 		Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" }
@@ -386,7 +395,7 @@ def fog_subshader():
 			{
 				v2f o;
 				o.pos = UnityObjectToClipPos(v.vertex);
-				o.uv = TRANSFORM_TEX(v.uv, _MainTex) + float2(_SpeedX, _SpeedY) * _Time.y;
+				o.uv = TRANSFORM_TEX(v.uv, _MainTex) + float2(_SpeedX, _SpeedY) * _Time.x;
 				o.screen = ComputeScreenPos(o.pos);
 				o.hero = ComputeScreenPos(mul(UNITY_MATRIX_VP, float4(_HeroWorldPos.xyz, 1)));
 				o.color = v.color * _Color;

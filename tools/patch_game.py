@@ -129,6 +129,16 @@ patch("Gate.cs", [
      "\t\t\tanimator.enabled = true;\n\t\t\tanimator.Rebind(); // iOS port: see patch_game.py\n\t\t\tanimator.Play(closeAnim);"),
 ])
 
+# The same happens to any animator that's switched off and on again (the Far Fields toll door is disabled by its
+# FSM on load and enabled to play Drop, which turned its collision off but never moved the door). Re-enabling
+# already resets the animator, so rebinding then changes nothing else.
+patch("HutongGames/PlayMaker/Actions/SetAnimator.cs", [
+    ("\t\t\t\t\tcomponent.enabled = active.Value;\n",
+     "\t\t\t\t\tbool rebind = active.Value && !component.enabled; // iOS port: see patch_game.py\n"
+     "\t\t\t\t\tcomponent.enabled = active.Value;\n"
+     "\t\t\t\t\tif (rebind)\n\t\t\t\t\t\tcomponent.Rebind();\n"),
+])
+
 # Rumble: Unity can't rumble controllers on iOS, so the mixed motor strengths also go to IOSPort.Rumble
 # (controller haptics, or the phone's while using the touch controls).
 patch("PlatformVibrationHelper.cs", [
