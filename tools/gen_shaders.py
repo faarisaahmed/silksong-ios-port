@@ -312,8 +312,8 @@ def tiled_masked_subshader(props):
     # its tiling, scrolling at _SpeedX/Y), and the sprite itself (usually a soft white blob) only fades it out at the edges.
     scroll = "p += float2(_SpeedX, _SpeedY) * _Time.y;" if "_SpeedX" in props and "_SpeedY" in props else ""
     speed = "float _SpeedX; float _SpeedY;" if scroll else ""
-    offsets = "float _WorldOffsetZ;" if "_WorldOffsetZ" in props else ""
-    depth = "p.x += worldPos.z * _WorldOffsetZ;" if offsets else ""
+    # _WorldOffsetZ is left out: offsetting by world z only shifts the pattern of things that stand still, but slides
+    # it a long way across things that move in depth (the webs pulsing with the cocoon in the silk heart memories).
     # The updrafts set LOCAL_SPACE_X: their texture is clamped across, so it has to be laid out across the sprite itself.
     local = ""
     if "_UseLocalSpaceX" in props:
@@ -338,7 +338,7 @@ def tiled_masked_subshader(props):
 			sampler2D _ScrollTex;
 			float4 _ScrollTex_ST;
 			fixed4 _Color;
-			{speed} {offsets}
+			{speed}
 			struct appdata {{ float4 vertex : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; }};
 			struct v2f {{ float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; float2 scroll : TEXCOORD1; }};
 			v2f vert(appdata v)
@@ -349,7 +349,6 @@ def tiled_masked_subshader(props):
 				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
 				float2 p = worldPos.xy;{local}
 				{scroll}
-				{depth}
 				o.scroll = p * _ScrollTex_ST.xy + _ScrollTex_ST.zw;
 				o.color = v.color * _Color;
 				return o;
@@ -543,6 +542,10 @@ def sprite_subshader(name, props):
         post.append("c.rgb = lerp(c.rgb, dot(c.rgb, float3(0.3, 0.59, 0.11)).xxx, saturate(_Desaturation));")
     if "_TextureFade" in props:  # UI masks fading
         pass
+    # Custom/Texture Masked: greyscale masks (red channel) multiply the alpha when _UseMask/_UseMask2 is on. The boss
+    # death mist slides one across itself (by animating _MaskTex_ST) to wipe itself away.
+    masks = [(t, u) for t, u in (("_MaskTex", "_UseMask"), ("_MaskTex2", "_UseMask2")) if t in props and u in props] \
+        if name == "Custom/Texture Masked" else []
     n = name.lower()
     if "linear light" in n or "linearlight" in n:
         # Linear light is dst + 2 * src - 1: add the part above mid grey, then subtract the part below it.
@@ -553,7 +556,7 @@ def sprite_subshader(name, props):
     tags = '"Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" "CanUseSpriteAtlas"="True"'
     colormask = "ColorMask [_ColorMask]" if "_ColorMask" in props else ""
     world = "float3 worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;" if sway else ""
-    pass_code = "\n".join(sprite_pass(b, f, decl, uv, tint, post, world, sway) for b, f in passes)
+    pass_code = "\n".join(sprite_pass(b, f, decl, uv, tint, post, world, sway, masks) for b, f in passes)
     return f"""	SubShader {{
 		Tags {{ {tags} }}
 		Cull Off
@@ -565,7 +568,12 @@ def sprite_subshader(name, props):
 	}}"""
 
 
-def sprite_pass(blend, final, decl, uv, tint, post, world, sway):
+def sprite_pass(blend, final, decl, uv, tint, post, world, sway, masks=()):
+    decl = decl + [f"sampler2D {t}; float4 {t}_ST; float {u};" for t, u in masks]
+    fields = "".join(f" float2 mask{n} : TEXCOORD{n + 1};" for n in range(len(masks)))
+    mask_uv = "".join(f" o.mask{n} = TRANSFORM_TEX(v.uv, {t});" for n, (t, _) in enumerate(masks))
+    mask_post = [f"c.a *= lerp(1, tex2D({t}, i.mask{n}).r, {u});" for n, (t, u) in enumerate(masks)]
+    post = mask_post + post
     return f"""		Pass {{
 			{blend}
 			CGPROGRAM
@@ -576,14 +584,14 @@ def sprite_pass(blend, final, decl, uv, tint, post, world, sway):
 			float4 _MainTex_ST;
 			{' '.join(decl)}
 			struct appdata {{ float4 vertex : POSITION; float4 color : COLOR; float2 uv : TEXCOORD0; }};
-			struct v2f {{ float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; }};
+			struct v2f {{ float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0;{fields} }};
 			v2f vert(appdata v)
 			{{
 				v2f o;
 				{world}
 				{sway}
 				o.pos = UnityObjectToClipPos(v.vertex);
-				o.uv = TRANSFORM_TEX(v.uv, _MainTex);
+				o.uv = TRANSFORM_TEX(v.uv, _MainTex);{mask_uv}
 				{' '.join(uv)}
 				o.color = v.color;
 				{' '.join(tint)}

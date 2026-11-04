@@ -9,7 +9,7 @@ namespace IOSPort
     // the touch HUD in the Simulator. Lines: "<seconds after gameplay starts> down <finger> <x> <y>",
     // "<seconds> up <finger>" or "<seconds> shot <name>" (x/y are safe-area fractions, 0,0 = bottom left).
     // "sdown" takes whole-screen fractions instead; "press <InputControlType>" / "release" hold a virtual
-    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates; "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility and "silk" fills the silk spool. A first line of "title"
+    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates; "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
     // starts the clock on the title screen instead of in gameplay.
     public class TouchScript : MonoBehaviour
     {
@@ -61,6 +61,16 @@ namespace IOSPort
                     CheatManager.Invincibility = (CheatManager.InvincibilityStates)System.Enum.Parse(typeof(CheatManager.InvincibilityStates), p[2]);
                 else if (p[1] == "silk" && HeroController.instance != null)
                     HeroController.instance.AddSilk(PlayerData.instance.CurrentSilkMax, false);
+                else if (p[1] == "hurt" && p.Length >= 3)
+                {
+                    string name = p.Length >= 4 ? string.Join(" ", p, 3, p.Length - 3) : null;
+                    foreach (var hm in Object.FindObjectsByType<HealthManager>(FindObjectsSortMode.None))
+                        if (hm.isActiveAndEnabled && !hm.isDead && (name == null || hm.name == name))
+                        {
+                            Debug.Log("[IOSPort] hurt " + hm.name + " hp " + hm.hp);
+                            hm.ApplyExtraDamage(int.Parse(p[2]));
+                        }
+                }
                 else if (p[1] == "export")
                     SaveExport.Export();
                 else if (p[1] == "import" && p.Length >= 3)
