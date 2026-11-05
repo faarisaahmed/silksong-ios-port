@@ -9,7 +9,7 @@ namespace IOSPort
     // the touch HUD in the Simulator. Lines: "<seconds after gameplay starts> down <finger> <x> <y>",
     // "<seconds> up <finger>" or "<seconds> shot <name>" (x/y are safe-area fractions, 0,0 = bottom left).
     // "sdown" takes whole-screen fractions instead; "press <InputControlType>" / "release" hold a virtual
-    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates; "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
+    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates, "animcheck" logs animators with stale bindings, "menustyle <n>" shows a title screen style; "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "fsmlog <object>" logs its FSMs state changes, "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
     // starts the clock on the title screen instead of in gameplay.
     public class TouchScript : MonoBehaviour
     {
@@ -89,6 +89,16 @@ namespace IOSPort
                     DebugTools.WarpToVaultsDoor();
                 else if (p[1] == "gates")
                     DebugTools.LogGates();
+                else if (p[1] == "menustyle" && p.Length >= 3 && MenuStyles.Instance != null)
+                {
+                    var styles = MenuStyles.Instance.Styles;
+                    int i = int.Parse(p[2]);
+                    Debug.Log("[IOSPort] menu style " + i + " of " + styles.Length + ": " + (i < styles.Length ? styles[i].DisplayName : "?"));
+                    if (i < styles.Length)
+                        MenuStyles.Instance.SetStyle(i, false, false);
+                }
+                else if (p[1] == "animcheck")
+                    AnimatorRebind.Check();
                 else if (p[1] == "probe" && p.Length >= 3)
                     DebugTools.ProbeGate(string.Join(" ", p, 2, p.Length - 2));
                 else if (p[1] == "release")
@@ -131,6 +141,8 @@ namespace IOSPort
                         if (r.bounds.center.z < z && r.gameObject.layer != 5)
                             r.enabled = false;
                 }
+                else if (p[1] == "fsmlog" && p.Length >= 3)
+                    StartCoroutine(LogFsms(string.Join(" ", p, 2, p.Length - 2)));
                 else if (p[1] == "fsmstate" && p.Length >= 4)
                 {
                     string name = string.Join(" ", p, 3, p.Length - 3);
@@ -218,6 +230,29 @@ namespace IOSPort
         }
 
         // For tracking down rendering problems: the visible renderers covering the middle of the screen, nearest first.
+        // Logs every state change of the named object's FSMs (and its children's), with the animator states.
+        static IEnumerator LogFsms(string name)
+        {
+            var last = new System.Collections.Generic.Dictionary<PlayMakerFSM, string>();
+            while (true)
+            {
+                foreach (var fsm in Object.FindObjectsByType<PlayMakerFSM>(FindObjectsSortMode.None))
+                {
+                    var t = fsm.transform;
+                    while (t != null && t.name != name)
+                        t = t.parent;
+                    if (t == null || (last.TryGetValue(fsm, out string was) && was == fsm.ActiveStateName))
+                        continue;
+                    last[fsm] = fsm.ActiveStateName;
+                    string anims = "";
+                    foreach (var a in t.GetComponentsInChildren<Animator>())
+                        anims += " " + a.name + (a.isActiveAndEnabled ? "" : "(off)") + "=" + a.GetCurrentAnimatorStateInfo(0).shortNameHash + "@" + a.GetCurrentAnimatorStateInfo(0).normalizedTime.ToString("0.00");
+                    Debug.Log("[IOSPort] fsm " + fsm.name + "/" + fsm.FsmName + " -> " + fsm.ActiveStateName + " t=" + Time.time.ToString("0.0") + anims);
+                }
+                yield return null;
+            }
+        }
+
         static void LogRenderersInView()
         {
             var cam = GameCameras.instance != null ? GameCameras.instance.tk2dCam.GetComponent<Camera>() : Camera.main;

@@ -28,8 +28,7 @@ ASSETS, OUT, TMP = sys.argv[1:4]
 GENERATED = "// iOS port: generated replacement for an AssetRipper dummy shader"
 
 PASSTHROUGH = {
-    "ImageEffects/Deband", "Custom/Brightness Effect",
-    "Custom/Contrast Effect", "Hidden/NoiseAndGrain",
+    "ImageEffects/Deband", "Custom/Brightness Effect", "Hidden/NoiseAndGrain",
 }
 
 # Image effects reimplemented from their published behaviour (Unity Standard Assets) or from the script using them.
@@ -91,6 +90,45 @@ SPECIAL = {
 				color.rgb = (color.rgb - 0.5) * _Contrast + 0.5;
 			#endif
 				return color;
+			}
+			ENDCG
+		}
+	}""",
+    # A plane (not a camera effect) that raises the contrast of what's behind it, and with CAN_DESATURATE takes out
+    # colour, through its _Mask: the Citadel of Song title screen and the screen-wide desaturation in _GameCameras.
+    # As a passthrough it drew its unset _MainTex, a white plane.
+    "Custom/Contrast Effect": """	SubShader {
+		Tags { "Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" }
+		GrabPass { "_ContrastGrab" }
+		Pass {
+			Cull Off ZWrite Off Blend Off
+			CGPROGRAM
+			#pragma vertex vert
+			#pragma fragment frag
+			#pragma multi_compile __ CAN_DESATURATE
+			#include "UnityCG.cginc"
+			sampler2D _ContrastGrab;
+			sampler2D _Mask;
+			float4 _Mask_ST;
+			float _Contrast;
+			float _Desaturation;
+			struct v2f { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float4 grab : TEXCOORD1; };
+			v2f vert(appdata_base v)
+			{
+				v2f o;
+				o.pos = UnityObjectToClipPos(v.vertex);
+				o.uv = TRANSFORM_TEX(v.texcoord.xy, _Mask);
+				o.grab = ComputeGrabScreenPos(o.pos);
+				return o;
+			}
+			float4 frag(v2f i) : SV_Target
+			{
+				float4 behind = tex2Dproj(_ContrastGrab, i.grab);
+				float3 c = (behind.rgb - 0.5) * _Contrast + 0.5;
+			#if CAN_DESATURATE
+				c = lerp(c, Luminance(c).xxx, _Desaturation);
+			#endif
+				return float4(lerp(behind.rgb, saturate(c), tex2D(_Mask, i.uv).r), behind.a);
 			}
 			ENDCG
 		}
@@ -546,6 +584,9 @@ def sprite_subshader(name, props):
     # death mist slides one across itself (by animating _MaskTex_ST) to wipe itself away.
     masks = [(t, u) for t, u in (("_MaskTex", "_UseMask"), ("_MaskTex2", "_UseMask2")) if t in props and u in props] \
         if name == "Custom/Texture Masked" else []
+    # Custom/Texture Masked with _UseChannelMultiply: the vertex colour picks a channel of the texture (one pattern
+    # per channel) and that becomes the alpha of _Color: the note patterns on the Cogwork cylinder puzzle.
+    channel = name == "Custom/Texture Masked" and "_UseChannelMultiply" in props
     n = name.lower()
     if "linear light" in n or "linearlight" in n:
         # Linear light is dst + 2 * src - 1: add the part above mid grey, then subtract the part below it.
@@ -556,7 +597,7 @@ def sprite_subshader(name, props):
     tags = '"Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="Transparent" "PreviewType"="Plane" "CanUseSpriteAtlas"="True"'
     colormask = "ColorMask [_ColorMask]" if "_ColorMask" in props else ""
     world = "float3 worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;" if sway else ""
-    pass_code = "\n".join(sprite_pass(b, f, decl, uv, tint, post, world, sway, masks) for b, f in passes)
+    pass_code = "\n".join(sprite_pass(b, f, decl, uv, tint, post, world, sway, masks, channel) for b, f in passes)
     return f"""	SubShader {{
 		Tags {{ {tags} }}
 		Cull Off
@@ -568,11 +609,16 @@ def sprite_subshader(name, props):
 	}}"""
 
 
-def sprite_pass(blend, final, decl, uv, tint, post, world, sway, masks=()):
+def sprite_pass(blend, final, decl, uv, tint, post, world, sway, masks=(), channel=False):
     decl = decl + [f"sampler2D {t}; float4 {t}_ST; float {u};" for t, u in masks]
     fields = "".join(f" float2 mask{n} : TEXCOORD{n + 1};" for n in range(len(masks)))
     mask_uv = "".join(f" o.mask{n} = TRANSFORM_TEX(v.uv, {t});" for n, (t, _) in enumerate(masks))
     mask_post = [f"c.a *= lerp(1, tex2D({t}, i.mask{n}).r, {u});" for n, (t, u) in enumerate(masks)]
+    if channel:
+        decl = decl + ["float _UseChannelMultiply;"]
+        fields += " float4 vcol : TEXCOORD3;"
+        mask_uv += " o.vcol = v.color;"
+        mask_post = ["c = lerp(c, fixed4(_Color.rgb, _Color.a * dot(tex2D(_MainTex, i.uv), i.vcol)), _UseChannelMultiply);"] + mask_post
     post = mask_post + post
     return f"""		Pass {{
 			{blend}
