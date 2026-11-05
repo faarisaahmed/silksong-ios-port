@@ -4,6 +4,8 @@ AssetRipper (free) exports every shader as an opaque placeholder that keeps only
 Properties block. For each dummy shader this keeps the name and Properties (so materials
 keep their values) and writes a real SubShader chosen by category:
 
+  decompiled   -> the game's own shader, rebuilt from the PC build's compiled code by decompile_shaders.py
+                  (used for every shader it could translate; the categories below are the fallbacks)
   tmp          -> TextMeshPro's real shader source (shipped with Unity)
   passthrough  -> full-screen camera effects: copy the source image unchanged
   hidden       -> grab-pass distortion effects (heat haze, refraction): draw nothing
@@ -15,7 +17,7 @@ keep their values) and writes a real SubShader chosen by category:
 Shaders it generated before are regenerated too, so it can be run again after changes here.
 Files are only rewritten when their contents change (so Unity doesn't reimport them).
 
-Usage: gen_shaders.py <project Assets dir> <out dir> <TMP shader dir>
+Usage: gen_shaders.py <project Assets dir> <out dir> <TMP shader dir> [decompiled shader dir]
 Writes replacements to <out dir>/<path relative to Assets>. setup passes the Assets dir as <out dir>,
 so the dummies are replaced in place.
 """
@@ -25,7 +27,12 @@ import shutil
 import sys
 
 ASSETS, OUT, TMP = sys.argv[1:4]
+DECOMPILED = sys.argv[4] if len(sys.argv) > 4 else None
 GENERATED = "// iOS port: generated replacement for an AssetRipper dummy shader"
+
+# Kept as passthrough even when decompiled: film grain and debanding cost a full-screen pass for no visible gain
+# on a phone screen.
+KEEP_PASSTHROUGH = {"ImageEffects/Deband", "Hidden/NoiseAndGrain"}
 
 PASSTHROUGH = {
     "ImageEffects/Deband", "Custom/Brightness Effect", "Hidden/NoiseAndGrain",
@@ -711,7 +718,8 @@ def main():
                 continue
             path = os.path.join(root, f)
             text = open(path, encoding="utf-8", errors="ignore").read()
-            if "DummyShaderTextExporter" not in text and not text.startswith(GENERATED):
+            # (Unity's shader upgrader may have put "// Upgrade NOTE" lines above the generated marker)
+            if "DummyShaderTextExporter" not in text and not re.sub(r"^(// Upgrade NOTE.*\n|\s*\n)*", "", text).startswith(GENERATED):
                 continue
             m = re.search(r'Shader\s+"([^"]+)"', text)
             name = m.group(1)
@@ -727,7 +735,10 @@ def main():
                 tmp_dirs.add(os.path.dirname(rel))
                 kind = "tmp"
             else:
-                if name in SPECIAL:
+                decompiled = os.path.join(DECOMPILED, name.replace("/", "_") + ".shaderlab") if DECOMPILED else None
+                if decompiled and os.path.exists(decompiled) and name not in KEEP_PASSTHROUGH:
+                    kind, body = "decompiled", open(decompiled, encoding="utf-8").read().rstrip("\n")
+                elif name in SPECIAL:
                     kind, body = "special", SPECIAL[name]
                 elif name in PASSTHROUGH:
                     kind, body = "passthrough", passthrough_subshader()

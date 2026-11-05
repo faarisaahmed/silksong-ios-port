@@ -249,7 +249,16 @@ EOF
     p=$(cat $d/pathname 2>/dev/null) || continue
     if [[ $p == *.shader || $p == *.cginc ]]; then cp $d/asset $WORK/tmp_shaders/${p:t}; fi
   done
-  python3 -I $HERE/tools/gen_shaders.py $PROJECT/Assets $PROJECT/Assets $WORK/tmp_shaders | sed 's/^/    /' || fail "shader replacement failed"
+  # The game's real shaders, rebuilt from the PC build's compiled code (the PC files are deleted below, so it's now).
+  note "decompiling the game's shaders..."
+  if [[ ! -x $WORK/tools/pyenv/bin/python3 ]]; then
+    python3 -m venv $WORK/tools/pyenv && $WORK/tools/pyenv/bin/pip install -q UnityPy==1.25.3 >$WORK/logs/pip.log 2>&1 \
+      || fail "couldn't install UnityPy (see logs/pip.log)"
+  fi
+  rm -rf $WORK/decompiled_shaders
+  $WORK/tools/pyenv/bin/python3 -I $HERE/tools/decompile_shaders.py $DATA "$UNITY_DIR/Unity.app/Contents/CGIncludes" $WORK/decompiled_shaders \
+    | sed 's/^/    /' || fail "decompiling the shaders failed"
+  python3 -I $HERE/tools/gen_shaders.py $PROJECT/Assets $PROJECT/Assets $WORK/tmp_shaders $WORK/decompiled_shaders | sed 's/^/    /' || fail "shader replacement failed"
   rm -rf $WORK/tmp_pkg
   mark port
   # The PC files aren't needed from here on (./build only uses the Unity project), so give the space back.

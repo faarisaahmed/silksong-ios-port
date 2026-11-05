@@ -40,8 +40,9 @@ out=$(python3 -I $HERE/tools/patch_game.py $PROJECT/Assets) || { echo "$out"; ex
 # --checksum: a fresh clone or a copied project has new file dates, which alone shouldn't cost an asset rebuild.
 if [[ -n $(rsync -a --checksum --itemize-changes $HERE/port/Assets/ $PROJECT/Assets/ | grep '^>f' | grep -v -E ' (Scripts/.*\.cs|Plugins/iOS/.*)$') ]]; then changed=1; fi
 
-# Shader replacements.
-out=$(python3 -I $HERE/tools/gen_shaders.py $PROJECT/Assets $PROJECT/Assets $WORK/tmp_shaders)
+# Shader replacements (the game's own shaders when setup could decompile them, see decompile_shaders.py).
+dec=(); [[ -d $WORK/decompiled_shaders ]] && dec=($WORK/decompiled_shaders)
+out=$(python3 -I $HERE/tools/gen_shaders.py $PROJECT/Assets $PROJECT/Assets $WORK/tmp_shaders $dec)
 if [[ $out != *"changed: 0 "* ]]; then changed=1; fi
 
 if (( changed )); then
