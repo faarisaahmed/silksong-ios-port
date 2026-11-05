@@ -12,7 +12,7 @@ each one back into ShaderLab + HLSL that Unity can compile for Metal:
 
 Usage: decompile_shaders.py <game _Data dir> <Unity CGIncludes dir> <out dir>
 Writes <out dir>/<shader name, / replaced by _>.shaderlab: the shader's SubShader blocks (without Properties, which
-the ripped project already has). gen_shaders.py uses these in place of its approximations. Needs UnityPy.
+the ripped project already has). Names that several shaders share get "@<original file name>" added. gen_shaders.py uses these in place of its approximations. Needs UnityPy.
 """
 import glob
 import os
@@ -22,6 +22,11 @@ import sys
 import warnings
 
 D3D11 = 4  # ShaderCompilerPlatform
+# GrabPass shaders that find their spot in the grabbed screen with ComputeScreenPos (which flips by
+# _ProjectionParams.x) rather than ComputeGrabScreenPos (which always flips, like every other grab shader here).
+# The two only agree when _ProjectionParams.x is -1, as it is on PC, where the game camera renders into a texture;
+# on iPhone it can be +1, which reads the grab upside down (the red Ventrica tube light, Hornet's odd light ring).
+GRAB_FLIP_FIXED = {"Sprites/Screen"}
 SKIP_KEYWORDS = {"INSTANCING_ON", "PROCEDURAL_INSTANCING_ON", "STEREO_INSTANCING_ON", "UNITY_SINGLE_PASS_STEREO",
                  "STEREO_MULTIVIEW_ON", "STEREO_CUBEMAP_RENDER_ON", "DOTS_INSTANCING_ON"}
 
@@ -286,6 +291,7 @@ class Params:
         self.cbs = {}       # cb name -> {"size": n, "vars": [(name, type, rows, cols, is_matrix, array, offset)]}
         self.bindings = {}  # register -> cb name
         self.textures = {}  # t register -> (name, sampler register)
+        self.grab_flip = False
 
     def add_cb(self, name, size, var):
         cb = self.cbs.setdefault(name, {"size": size, "vars": []})
@@ -407,6 +413,12 @@ class Program:
             elem, col = divmod(rel, regs)
             # Unity's shader upgrader rewrites this name on import (which would make gen_shaders.py see a change)
             ref = {"glstate_matrix_projection": "UNITY_MATRIX_P"}.get(name, name) + ("[%d]" % elem if arr else "")
+            if name == "_ProjectionParams" and self.params.grab_flip:
+                # See GRAB_FLIP_FIXED.
+                self.declare_uniform(cbname, name, typ, rows, cols, ismat, arr, off)
+                comps[0] = "asuint(-1.0)"
+                comps[1:4] = ["asuint(float(_ProjectionParams.%s))" % c for c in "yzw"]
+                continue
             if ismat:
                 for r_ in range(rows):
                     comps[r_] = "asuint(float(%s[%d][%d]))" % (ref, r_, col)
@@ -803,7 +815,7 @@ def keyword_test(kws, all_kws):
     return " && ".join("defined(%s)" % k for k in kws)
 
 
-def build_pass(p, names, keyword_names, segs, table, builtins):
+def build_pass(p, names, keyword_names, segs, table, builtins, shader_name):
     """HLSL program text for one pass, or None if it has no programs."""
     stages = {}
     uniforms = {}
@@ -824,6 +836,7 @@ def build_pass(p, names, keyword_names, segs, table, builtins):
             if any(k in SKIP_KEYWORDS for k in kws):
                 continue
             params = Params()
+            params.grab_flip = shader_name in GRAB_FLIP_FIXED
             params.cbs = {k: {"size": v["size"], "vars": list(v["vars"])} for k, v in common.cbs.items()}
             params.bindings = dict(common.bindings)
             params.textures = dict(common.textures)
@@ -1219,7 +1232,7 @@ def decompile(t, builtins):
                 if any(x for x in (p[st]["m_PlayerSubPrograms"] or [])):
                     raise Unsupported(st)
             names = {v: k for k, v in p["m_NameIndices"]}
-            stages, uniforms, textures, keywords = build_pass(p, names, pf["m_KeywordNames"], segs, table, builtins)
+            stages, uniforms, textures, keywords = build_pass(p, names, pf["m_KeywordNames"], segs, table, builtins, pf["m_Name"])
             body = ["\t\tPass {"]
             body += ["\t\t\t" + l for l in state_lines(p["m_State"])]
             body += [("\t\t\t" + l) if not l.startswith("#") else l for l in emit_program(stages, uniforms, textures, keywords, builtins)]
@@ -1231,22 +1244,36 @@ def decompile(t, builtins):
 
 
 def load_shaders(data_dir):
-    """Every shader in the game: the shared shader bundle, the bundles that carry their own, and the player data."""
+    """Every shader in the game: the shared shader bundle, the bundles that carry their own, and the player data.
+    Returns (name, original file name or None, typetree). Two different shaders can share a name (the game has a
+    screen-blend and a vivid-light shader both called Sprites/Screen); the file name tells them apart."""
     import UnityPy
     UnityPy.config.FALLBACK_UNITY_VERSION = "6000.0.50f1"
     files = sorted(glob.glob(os.path.join(data_dir, "StreamingAssets", "aa", "*", "*.bundle")))
     files += [os.path.join(data_dir, f) for f in ("resources.assets", "globalgamemanagers.assets")]
-    shaders = {}
+    shaders = []
+    seen = set()
     for f in files:
         try:
             env = UnityPy.load(f)
         except Exception:
             continue
+        paths = {}
+        try:
+            for path, obj in env.container.items():
+                paths[obj.path_id] = os.path.splitext(os.path.basename(path))[0]
+        except Exception:
+            pass
         for o in env.objects:
             if o.type.name != "Shader":
                 continue
             t = o.read_typetree()
-            shaders.setdefault(t["m_ParsedForm"]["m_Name"], t)
+            name = t["m_ParsedForm"]["m_Name"]
+            key = (name, bytes(t["compressedBlob"][:4096]))
+            if key in seen:
+                continue
+            seen.add(key)
+            shaders.append((name, paths.get(o.path_id), t))
     return shaders
 
 
@@ -1257,15 +1284,22 @@ def main():
     builtins = builtin_names(cginc)
     os.makedirs(out_dir, exist_ok=True)
     ok, failed = 0, []
-    for name, t in sorted(load_shaders(data_dir).items()):
+    shaders = load_shaders(data_dir)
+    counts = {}
+    for name, _, _ in shaders:
+        counts[name] = counts.get(name, 0) + 1
+    for name, original, t in sorted(shaders, key=lambda x: (x[0], x[1] or "")):
         if only and name not in only:
             continue
+        # A name shared by several shaders gets "<name>@<original file name>"; gen_shaders.py matches that against
+        # the ripped file's name.
+        out_name = name.replace("/", "_") + ("@" + original if counts[name] > 1 and original else "")
         try:
             text = decompile(t, builtins)
         except Exception as e:  # anything it can't translate keeps gen_shaders.py's version
             failed.append("%s (%s%s)" % (name, "" if isinstance(e, Unsupported) else type(e).__name__ + ": ", e))
             continue
-        with open(os.path.join(out_dir, name.replace("/", "_") + ".shaderlab"), "w", encoding="utf-8") as f:
+        with open(os.path.join(out_dir, out_name + ".shaderlab"), "w", encoding="utf-8") as f:
             f.write(text + "\n")
         ok += 1
     print("decompiled %d shaders" % ok)

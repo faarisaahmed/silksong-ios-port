@@ -735,8 +735,14 @@ def main():
                 tmp_dirs.add(os.path.dirname(rel))
                 kind = "tmp"
             else:
-                decompiled = os.path.join(DECOMPILED, name.replace("/", "_") + ".shaderlab") if DECOMPILED else None
-                if decompiled and os.path.exists(decompiled) and name not in KEEP_PASSTHROUGH:
+                decompiled = None
+                if DECOMPILED:  # "<name>@<file name>" when several shaders share the name
+                    base = name.replace("/", "_")
+                    for cand in (base + "@" + os.path.splitext(f)[0], base):
+                        if os.path.exists(os.path.join(DECOMPILED, cand + ".shaderlab")):
+                            decompiled = os.path.join(DECOMPILED, cand + ".shaderlab")
+                            break
+                if decompiled and name not in KEEP_PASSTHROUGH:
                     kind, body = "decompiled", open(decompiled, encoding="utf-8").read().rstrip("\n")
                 elif name in SPECIAL:
                     kind, body = "special", SPECIAL[name]
