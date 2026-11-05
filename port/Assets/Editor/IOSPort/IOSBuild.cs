@@ -77,6 +77,7 @@ namespace IOSPort
 
         static void ConfigurePlayer()
         {
+            ExecutionOrders.Apply();
             // Editor play-testing can leave these on; they make a slow "Development" player with a debug console.
             // (Simulator builds are always Development: Unity only ships a development simulator player.)
             EditorUserBuildSettings.development = Simulator;

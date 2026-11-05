@@ -9,7 +9,7 @@ namespace IOSPort
     // the touch HUD in the Simulator. Lines: "<seconds after gameplay starts> down <finger> <x> <y>",
     // "<seconds> up <finger>" or "<seconds> shot <name>" (x/y are safe-area fractions, 0,0 = bottom left).
     // "sdown" takes whole-screen fractions instead; "press <InputControlType>" / "release" hold a virtual
-    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates, "animcheck" logs animators with stale bindings, "menustyle <n>" shows a title screen style; "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "fsmlog <object>" logs its FSMs state changes, "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
+    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates, "animcheck" logs animators with stale bindings, "menustyle <n>" shows a title screen style, "lever <name>" pulls that lever, "dial" logs the dial doors (animators and colliders); "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "fsmlog <object>" logs its FSMs state changes, "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
     // starts the clock on the title screen instead of in gameplay.
     public class TouchScript : MonoBehaviour
     {
@@ -97,6 +97,25 @@ namespace IOSPort
                     if (i < styles.Length)
                         MenuStyles.Instance.SetStyle(i, false, false);
                 }
+                else if (p[1] == "lever" && p.Length >= 3)
+                {
+                    string name = string.Join(" ", p, 2, p.Length - 2);
+                    foreach (var lever in Object.FindObjectsByType<Lever>(FindObjectsSortMode.None))
+                        if (lever.name == name)
+                            lever.OnHitDelayed.Invoke();
+                }
+                else if (p[1] == "dial")
+                    foreach (var dial in Object.FindObjectsByType<DialDoorBridge>(FindObjectsSortMode.None))
+                    {
+                        string doors = "";
+                        foreach (var a in dial.GetComponentsInChildren<Animator>(true))
+                            doors += " " + a.name + (a.enabled ? "" : "(off)") + "=" + a.GetCurrentAnimatorStateInfo(0).shortNameHash + "@" + a.GetCurrentAnimatorStateInfo(0).normalizedTime.ToString("0.00");
+                        string solid = "";
+                        foreach (var c in dial.GetComponentsInChildren<Collider2D>())
+                            if (c.enabled && !c.isTrigger)
+                                solid += " " + c.name + "@" + c.bounds.center.ToString("0.0");
+                        Debug.Log("[IOSPort] dial " + dial.name + " doors:" + doors + " solid:" + solid);
+                    }
                 else if (p[1] == "animcheck")
                     AnimatorRebind.Check();
                 else if (p[1] == "probe" && p.Length >= 3)

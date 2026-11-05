@@ -139,6 +139,13 @@ patch("HutongGames/PlayMaker/Actions/SetAnimator.cs", [
      "\t\t\t\t\tif (rebind)\n\t\t\t\t\t\tcomponent.Rebind();\n"),
 ])
 
+# And the round gates that a lever turns (the dial door above Song_20): their door animators are switched off in
+# Start and on again for each turn, so the doors closed and opened in name only and the passage stayed blocked.
+patch("DialDoorBridge.cs", [
+    ("\t\t\tobj.enabled = true;\n\t\t\tobj.Play(_closeAnim);",
+     "\t\t\tobj.enabled = true;\n\t\t\tobj.Rebind(); // iOS port: see patch_game.py\n\t\t\tobj.Play(_closeAnim);"),
+])
+
 # Rumble: Unity can't rumble controllers on iOS, so the mixed motor strengths also go to IOSPort.Rumble
 # (controller haptics, or the phone's while using the touch controls).
 patch("PlatformVibrationHelper.cs", [
