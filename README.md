@@ -220,8 +220,8 @@ If a mod mostly works but one feature doesn't, it's usually one of these.
 - Controllers (Xbox, PlayStation, Switch, Backbone and other MFi ones) work. The left menu button (View, Share/Create, minus, Select) opens the inventory and the right one (Menu, Options, plus, Start) pauses. iOS doesn't report the PlayStation touchpad click, so Share does the inventory there.
 - Rumble: on the controller when you're using one, otherwise the phone vibrates. The game's Controller Rumble setting turns it down or off.
 - A settings panel (the gear on the title screen) for touch controls, screen width (full width or 16:9 like PC), render scale and other performance options.
-- Automatic save backups in `SaveBackups/`, and an **Export saves** button that zips your saves to share or keep in iCloud.
-- **Import saves** (title screen settings panel) takes a zip from Export saves, or `user1.dat` to `user4.dat` from a PC or another phone. `userN.dat` goes into slot N, a `.dat` with any other name goes into the first empty slot. Whatever was in those slots is backed up to `SaveBackups/` first.
+- Automatic save backups in `SaveBackups/`, one file per save slot each time it changes (`Save 1 - 2026-11-04 19.30.dat`, the newest 15 kept), and an **Export saves** button that zips your saves to share or keep in iCloud.
+- **Import saves** (title screen settings panel) takes a zip from Export saves, or `user1.dat` to `user4.dat` from a PC or another phone. `userN.dat` and a backup (`Save N - <date>.dat`) go into slot N, a `.dat` with any other name goes into the first empty slot. Whatever was in those slots is backed up to `SaveBackups/` first.
 - Saves and mod files visible in the Files app.
 - Runs at the screen's refresh rate instead of iOS's default 30 fps cap.
 

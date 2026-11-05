@@ -11,7 +11,7 @@ namespace IOSPort
 {
     // IMPORT SAVES in the port settings panel: opens the Files picker for a zip from EXPORT SAVES or loose
     // save files (user1.dat ... user4.dat, from a PC or another phone), copies them into Documents and refreshes
-    // the save slots. userN.dat goes into slot N; a .dat with any other name goes into the first empty slot.
+    // the save slots. userN.dat (or a backup, "Save N - <date>.dat") goes into slot N; a .dat with any other name goes into the first empty slot.
     // Only works from the title screen, so the game never has a save open while it changes. shared.dat (settings)
     // is left alone, because the game keeps its own copy in memory and would write over it. SaveBackup takes a
     // snapshot first, so the saves that were there can be got back from Documents/SaveBackups.
@@ -24,6 +24,7 @@ namespace IOSPort
         static extern void IOSPortPickFiles(string receiver);
 
         static readonly Regex SlotFile = new Regex(@"^user([1-4])\.dat(\.bak\d*)?$", RegexOptions.IgnoreCase);
+        static readonly Regex BackupFile = new Regex(@"^Save ([1-4]) - .*\.dat$", RegexOptions.IgnoreCase);
         static readonly Regex RestoreFolder = new Regex(@"^Restore_Points[1-4]$", RegexOptions.IgnoreCase);
         // Saves start with BinaryFormatter's header.
         static readonly byte[] Header = { 0, 1, 0, 0, 0, 255, 255, 255, 255 };
@@ -161,8 +162,15 @@ namespace IOSPort
                 }
         }
 
-        // userN.dat and its .bak copies keep their names; anything else isn't placed by name.
-        static string Destination(string name) => SlotFile.IsMatch(name) ? name.ToLowerInvariant() : null;
+        // userN.dat and its .bak copies keep their names, and the backups ("Save N - <date>.dat") go back to slot N;
+        // anything else isn't placed by name.
+        static string Destination(string name)
+        {
+            if (SlotFile.IsMatch(name))
+                return name.ToLowerInvariant();
+            var backup = BackupFile.Match(name);
+            return backup.Success ? "user" + backup.Groups[1].Value + ".dat" : null;
+        }
 
         static bool IsSave(byte[] data) => data.Length > Header.Length && data.AsSpan(0, Header.Length).SequenceEqual(Header);
     }
