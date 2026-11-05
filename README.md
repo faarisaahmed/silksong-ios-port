@@ -57,7 +57,7 @@ Once setup has finished you can get some back (see [Freeing up space](#freeing-u
 - Python 3 (comes with Xcode's command line tools)
 - [Homebrew](https://brew.sh) and `innoextract`, only if you use the GOG installer
 
-setup downloads the rest by itself: AssetRipper 2.0.0, the .NET 8 SDK (into `~/.dotnet`, no password needed), SteamCMD if you use Steam, and a couple of small helper tools.
+setup downloads the rest by itself: AssetRipper 2.0.0, the .NET 8 SDK (into `~/.dotnet`, no password needed), SteamCMD if you use Steam, UnityPy (to read the game's shaders) and a couple of small helper tools.
 
 ---
 
@@ -217,6 +217,7 @@ If a mod mostly works but one feature doesn't, it's usually one of these.
 ## Port features
 
 - Touch controls with a joystick, d-pad or arrow keys (pick in the settings panel). They hide while you use a controller.
+- Hold MENU + INV to edit the layout: drag buttons, resize them, change what they do, and move the HUD (the masks, and the spool, tools and counters below them, as two blocks).
 - Controllers (Xbox, PlayStation, Switch, Backbone and other MFi ones) work. The left menu button (View, Share/Create, minus, Select) opens the inventory and the right one (Menu, Options, plus, Start) pauses. iOS doesn't report the PlayStation touchpad click, so Share does the inventory there.
 - Rumble: on the controller when you're using one, otherwise the phone vibrates. The game's Controller Rumble setting turns it down or off.
 - A settings panel (the gear on the title screen) for touch controls, screen width (full width or 16:9 like PC), render scale and other performance options.

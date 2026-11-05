@@ -9,7 +9,7 @@ namespace IOSPort
     // the touch HUD in the Simulator. Lines: "<seconds after gameplay starts> down <finger> <x> <y>",
     // "<seconds> up <finger>" or "<seconds> shot <name>" (x/y are safe-area fractions, 0,0 = bottom left).
     // "sdown" takes whole-screen fractions instead; "press <InputControlType>" / "release" hold a virtual
-    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates, "animcheck" logs animators with stale bindings, "menustyle <n>" shows a title screen style, "lever <name>" pulls that lever, "dial" logs the dial doors (animators and colliders); "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "rinfo <name>" logs those renderers' materials and shaders; "fsmlog <object>" logs its FSMs state changes, "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
+    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates, "animcheck" logs animators with stale bindings, "menustyle <n>" shows a title screen style, "lever <name>" pulls that lever, "dial" logs the dial doors (animators and colliders); "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "rinfo <name>" logs those renderers' materials and shaders; "hud <masks x> <masks y> <spool x> <spool y>" moves the HUD blocks (screen heights); "fsmlog <object>" logs its FSMs state changes, "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
     // starts the clock on the title screen instead of in gameplay.
     public class TouchScript : MonoBehaviour
     {
@@ -189,6 +189,14 @@ namespace IOSPort
                     LogRenderersInView();
                 else if (p[1] == "darkness")
                     SaveDarkness();
+                else if (p[1] == "hud" && p.Length >= 6)
+                {
+                    float F(string v) => float.Parse(v, System.Globalization.CultureInfo.InvariantCulture);
+                    HudLayout.MasksOffset = new Vector2(F(p[2]), F(p[3]));
+                    HudLayout.SpoolOffset = new Vector2(F(p[4]), F(p[5]));
+                    foreach (var b in new[] { HudLayout.Block.Masks, HudLayout.Block.Spool })
+                        Debug.Log("[IOSPort] hud " + b + ": " + (HudLayout.ScreenRect(b, out var r) ? r.ToString() : "not showing"));
+                }
                 else if (p[1] == "rinfo" && p.Length >= 3)
                     LogRendererInfo(p[2]);
                 else if (p[1] == "shot" && p.Length >= 3)

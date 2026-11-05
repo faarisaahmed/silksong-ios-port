@@ -17,7 +17,8 @@ namespace IOSPort
     //    like the Hollow Knight iOS port (Touch Controls Kit), with its art: a small base ring and an "L" knob that
     //    follows the finger well past the ring and springs back smoothly; in game a touch anywhere in the lower-left
     //    zone grabs it (and the D-pad).
-    //  - Hold MENU + INV together to enter remap mode: drag to move, tap a button to change its action.
+    //  - Hold MENU + INV together to enter remap mode: drag to move, tap a button to change its action. The game's
+    //    HUD can be moved there too, in two blocks (the masks, and everything below them; see HudLayout).
     //    The layout is saved in PlayerPrefs.
     // Art: button icons from the Silksong mobile HUD (Resources/IOSPortHud).
     [DefaultExecutionOrder(-1000)]
@@ -38,6 +39,8 @@ namespace IOSPort
             public int version = LayoutVersion;
             public float opacity = 0.6f;
             public List<Item> items = new List<Item>();
+            // HUD block offsets, in screen heights (HudLayout).
+            public float hudMasksX, hudMasksY, hudSpoolX, hudSpoolY;
         }
 
         class Role
@@ -141,6 +144,10 @@ namespace IOSPort
         bool selectedStick;
         int dragFinger = -1;
         Vector2 dragStart, dragOffset;
+        // HUD blocks in remap mode: their outline boxes, and the one being dragged (-1: none).
+        readonly RectTransform[] hudBoxes = new RectTransform[2];
+        int selectedHud = -1;
+        Vector2 hudDragStartOffset;
         bool dragMoved;
         readonly List<(RectTransform rect, Action onTap)> panelButtons = new List<(RectTransform, Action)>();
         readonly HashSet<int> panelFingers = new HashSet<int>();
@@ -190,6 +197,7 @@ namespace IOSPort
             foreach (var (id, name, action) in RoleDefs)
                 roles[id] = new Role { Id = id, Name = name, Action = action, Sprite = LoadSprite(id) };
             layout = LoadLayout();
+            ApplyHudLayout();
 
             // The game renders a 16:9 view; on wider screens the uncovered edges are never cleared,
             // which shows garbage behind the controls. A camera that draws nothing clears them first.
@@ -739,6 +747,7 @@ namespace IOSPort
             remapping = true;
             selected = null;
             selectedStick = false;
+            selectedHud = -1;
             dragFinger = -1;
             pad?.ReleaseAll();
             stickFinger = -1;
@@ -754,6 +763,8 @@ namespace IOSPort
             remapping = false;
             selected = null;
             selectedStick = false;
+            selectedHud = -1;
+            ShowHudBoxes(false);
             rolePicker.gameObject.SetActive(false);
             SaveLayout();
             ResetButtons();
@@ -768,6 +779,7 @@ namespace IOSPort
                 Style(c);
             }
             TintMovement(selectedStick ? new Color(1f, 0.82f, 0.4f, 1f) : Color.white);
+            PlaceHudBoxes();
 
             // MENU + INV again leaves remap mode.
             var menu = buttons.Find(b => b.Role.Id == "menu");
@@ -801,6 +813,12 @@ namespace IOSPort
                 }
                 if ((p - dragStart).magnitude > 12f * Mathf.Max(1f, Screen.dpi / 160f))
                     dragMoved = true;
+                if (dragMoved && selectedHud >= 0)
+                {
+                    var o = hudDragStartOffset + (p - dragStart) / Screen.height;
+                    SetHudOffset(selectedHud, o);
+                    return;
+                }
                 if (dragMoved)
                 {
                     var target = p + dragOffset;
@@ -824,10 +842,19 @@ namespace IOSPort
                     continue;
                 var hit = buttons.FindLast(c => Contains(c, point, 1f));
                 bool stickHit = hit == null && InMovementBox(point, 1f);
+                int hudHit = hit == null && !stickHit ? HudBoxAt(point) : -1;
                 rolePicker.gameObject.SetActive(false);
                 selected = hit;
                 selectedStick = stickHit;
-                if (hit != null || stickHit)
+                selectedHud = hudHit;
+                if (hudHit >= 0)
+                {
+                    dragFinger = id;
+                    dragStart = point;
+                    dragMoved = false;
+                    hudDragStartOffset = HudOffset(hudHit);
+                }
+                else if (hit != null || stickHit)
                 {
                     dragFinger = id;
                     dragStart = point;
@@ -866,9 +893,14 @@ namespace IOSPort
 
         void UpdateRemapHint()
         {
+            if (selectedHud >= 0)
+            {
+                remapHint.text = (selectedHud == 0 ? "Masks" : "Spool, tools and counters") + " selected: drag to move them. RESET puts everything back.";
+                return;
+            }
             string what = selectedStick ? "Movement control" : selected != null ? selected.Role.Name : null;
             remapHint.text = what == null
-                ? "REMAP: drag a control to move it, tap a button to change its action. MENU + INV or DONE to finish."
+                ? "REMAP: drag a control or a HUD box to move it, tap a button to change its action. MENU + INV or DONE to finish."
                 : what + " selected: SIZE - / + to resize." + (selectedStick ? "" : " Tap a button to pick its action.");
         }
 
@@ -907,6 +939,82 @@ namespace IOSPort
                 panelButtons.Add((b, actions[i].Item2));
             }
             remapPanel.gameObject.SetActive(false);
+
+            for (int i = 0; i < hudBoxes.Length; i++)
+            {
+                var box = NewRect(i == 0 ? "hud masks box" : "hud spool box", hud);
+                box.anchorMin = box.anchorMax = Vector2.zero;
+                var img = box.gameObject.AddComponent<Image>();
+                img.sprite = panelSprite;
+                img.type = Image.Type.Sliced;
+                img.raycastTarget = false;
+                box.gameObject.SetActive(false);
+                hudBoxes[i] = box;
+            }
+        }
+
+        // ---- HUD blocks (HudLayout) ----
+
+        Vector2 HudOffset(int block) => block == 0
+            ? new Vector2(layout.hudMasksX, layout.hudMasksY)
+            : new Vector2(layout.hudSpoolX, layout.hudSpoolY);
+
+        void SetHudOffset(int block, Vector2 o)
+        {
+            // Keep the block's box on screen.
+            if (HudLayout.ScreenRect((HudLayout.Block)block, out var r))
+            {
+                var delta = (o - HudOffset(block)) * Screen.height;
+                float dx = Mathf.Clamp(delta.x, -r.xMin, Screen.width - r.xMax);
+                float dy = Mathf.Clamp(delta.y, -r.yMin, Screen.height - r.yMax);
+                o = HudOffset(block) + new Vector2(dx, dy) / Screen.height;
+            }
+            if (block == 0) { layout.hudMasksX = o.x; layout.hudMasksY = o.y; }
+            else { layout.hudSpoolX = o.x; layout.hudSpoolY = o.y; }
+            ApplyHudLayout();
+        }
+
+        void ApplyHudLayout()
+        {
+            HudLayout.MasksOffset = new Vector2(layout.hudMasksX, layout.hudMasksY);
+            HudLayout.SpoolOffset = new Vector2(layout.hudSpoolX, layout.hudSpoolY);
+        }
+
+        int HudBoxAt(Vector2 point)
+        {
+            for (int i = 0; i < hudBoxes.Length; i++)
+                if (hudBoxes[i].gameObject.activeSelf && HudLayout.ScreenRect((HudLayout.Block)i, out var r))
+                {
+                    float pad = 12f * Mathf.Max(1f, Screen.dpi / 160f);
+                    if (point.x >= r.xMin - pad && point.x <= r.xMax + pad && point.y >= r.yMin - pad && point.y <= r.yMax + pad)
+                        return i;
+                }
+            return -1;
+        }
+
+        void PlaceHudBoxes()
+        {
+            for (int i = 0; i < hudBoxes.Length; i++)
+            {
+                var box = hudBoxes[i];
+                if (!HudLayout.ScreenRect((HudLayout.Block)i, out var r))
+                {
+                    box.gameObject.SetActive(false);
+                    continue;
+                }
+                float pad = 8f * Mathf.Max(1f, Screen.dpi / 160f);
+                box.gameObject.SetActive(true);
+                box.sizeDelta = (r.size + Vector2.one * pad * 2f) / canvas.scaleFactor;
+                box.anchoredPosition = r.center / canvas.scaleFactor;
+                box.GetComponent<Image>().color = selectedHud == i ? new Color(1f, 0.82f, 0.4f, 0.35f) : new Color(1f, 1f, 1f, 0.18f);
+            }
+        }
+
+        void ShowHudBoxes(bool show)
+        {
+            foreach (var box in hudBoxes)
+                if (box != null)
+                    box.gameObject.SetActive(show);
         }
 
         void BuildRolePicker()
@@ -1033,6 +1141,9 @@ namespace IOSPort
                 Destroy(c.Rect.gameObject);
             buttons.Clear();
             layout.items = defaults.items;
+            layout.hudMasksX = layout.hudMasksY = layout.hudSpoolX = layout.hudSpoolY = 0f;
+            ApplyHudLayout();
+            selectedHud = -1;
             stickItem = layout.items.Find(i => i.id == "stick");
             foreach (var item in layout.items)
                 if (item.id != "stick")
