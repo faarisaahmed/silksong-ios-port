@@ -402,7 +402,7 @@ class Program:
             end = start + regs * count
             if not (start <= slot < end):
                 continue
-            self.declare_uniform(cbname, name, typ, rows, cols, ismat, arr)
+            self.declare_uniform(cbname, name, typ, rows, cols, ismat, arr, off)
             rel = slot - start
             elem, col = divmod(rel, regs)
             # Unity's shader upgrader rewrites this name on import (which would make gen_shaders.py see a change)
@@ -432,7 +432,7 @@ class Program:
             start = off // 16
             regs = cols if ismat else 1
             if arr and start <= base < start + regs * arr:
-                self.declare_uniform(cbname, name, typ, rows, cols, ismat, arr)
+                self.declare_uniform(cbname, name, typ, rows, cols, ismat, arr, off)
                 if ismat:
                     rel = base - start
                     return ("asuint(transpose(%s[(%s + %d) / %d])[(%s + %d) %% %d])"
@@ -447,7 +447,7 @@ class Program:
     def _fail(self, why):
         raise Unsupported(why)
 
-    def declare_uniform(self, cbname, name, typ, rows, cols, ismat, arr):
+    def declare_uniform(self, cbname, name, typ, rows, cols, ismat, arr, off):
         if name in self.builtins.conditional:
             raise Unsupported("built-in %s that Unity only declares on some platforms" % name)
         if name in self.builtins:
@@ -457,10 +457,13 @@ class Program:
             raise Unsupported("constant type %d" % typ)
         t = base + ("%dx%d" % (rows, cols) if ismat else str(cols) if cols > 1 else "")
         decl = "%s %s%s;" % (t, name, "[%d]" % arr if arr else "")
+        # Only Unity's own buffers (UnityPerDrawSprite...) have to keep their layout; the rest are bound by name, and
+        # their members move between variants as unused ones are stripped.
+        off = off if cbname.startswith("Unity") else None
         prev = self.uniforms.get(name)
-        if prev and prev[1] != decl:
+        if prev and (prev[1] != decl or prev[2] != off):
             raise Unsupported("uniform %s declared two ways" % name)
-        self.uniforms[name] = (cbname, decl)
+        self.uniforms[name] = (cbname, decl, off)
 
     def index_expr(self, idx):
         base, sub = idx
@@ -838,6 +841,36 @@ def build_pass(p, names, keyword_names, segs, table, builtins):
     return stages, uniforms, textures, keywords_seen
 
 
+def decl_size(decl):
+    """Bytes a constant declaration takes, and whether it has to start on a 16-byte register."""
+    m = re.match(r"(float|int|bool|uint)(\d)?(?:x(\d))? \w+(?:\[(\d+)\])?;", decl)
+    base, n, m2, arr = m.groups()
+    if m2:  # matrix: one register per column
+        return 16 * int(m2) * max(int(arr or 1), 1), True
+    if arr:
+        return 16 * int(arr), True
+    return 4 * int(n or 1), False
+
+
+def padded_layout(cb, members):
+    out = []
+    pos = 0
+    pad = 0
+    for off, decl in members:
+        if off < pos:
+            raise Unsupported("overlapping constants in %s" % cb)
+        while pos < off:
+            out.append("float _pad_%s_%d;" % (re.sub(r"\W", "", cb), pad))
+            pad += 1
+            pos += 4
+        size, aligned = decl_size(decl)
+        if aligned and off % 16 or not aligned and off // 16 != (off + size - 1) // 16:
+            raise Unsupported("constant %s at an offset HLSL can't place" % decl)
+        out.append(decl)
+        pos = off + size
+    return out
+
+
 def emit_program(stages, uniforms, textures, keywords, builtins):
     out = []
     out.append("CGPROGRAM")
@@ -848,15 +881,19 @@ def emit_program(stages, uniforms, textures, keywords, builtins):
         out.append("#pragma multi_compile __ %s" % k)
     # uniforms, grouped by constant buffer
     groups = {}
-    for name, (cb, decl) in uniforms.items():
-        groups.setdefault(cb, []).append(decl)
+    for name, (cb, decl, off) in uniforms.items():
+        groups.setdefault(cb, []).append((off, decl))
     for cb in sorted(groups, key=lambda c: (c != "$Globals", c)):
-        decls = sorted(groups[cb])
         if cb in ("$Globals", ""):
-            out += decls
+            out += sorted(d for _, d in groups[cb])
         else:
+            # Unity fills some constant buffers (UnityPerDrawSprite and the like) as raw blocks with a fixed layout, so
+            # every member goes at its original offset, with padding for the members this shader doesn't use.
             out.append("CBUFFER_START(%s)" % cb)
-            out += ["\t" + d for d in decls]
+            if cb.startswith("Unity"):
+                out += ["\t" + d for d in padded_layout(cb, sorted(groups[cb]))]
+            else:
+                out += ["\t" + d for _, d in sorted(groups[cb], key=lambda x: x[1])]
             out.append("CBUFFER_END")
     for name, (dim, has_sampler) in sorted(textures.items()):
         if name in builtins:
