@@ -217,7 +217,7 @@ If a mod mostly works but one feature doesn't, it's usually one of these.
 ## Port features
 
 - Touch controls with a joystick, d-pad or arrow keys (pick in the settings panel). They hide while you use a controller.
-- Hold MENU + INV to edit the layout: drag buttons, resize them, change what they do or their shape, add and delete them. The HUD moves the same way, as one block or split into the masks, the spool and the rosary/shard counters.
+- Hold MENU + INV to edit the layout: drag buttons, resize them, change what they do or their shape, add and delete them, or move one back if it got dragged by accident. The HUD moves the same way, as one block or split into the masks, the spool and the rosary/shard counters.
 - Controllers (Xbox, PlayStation, Switch, Backbone and other MFi ones) work. The left menu button (View, Share/Create, minus, Select) opens the inventory and the right one (Menu, Options, plus, Start) pauses. iOS doesn't report the PlayStation touchpad click, so Share does the inventory there.
 - Rumble: on the controller when you're using one, otherwise the phone vibrates. The game's Controller Rumble setting turns it down or off.
 - A settings panel (the gear on the title screen) for touch controls, screen width (full width or 16:9 like PC), render scale and other performance options.

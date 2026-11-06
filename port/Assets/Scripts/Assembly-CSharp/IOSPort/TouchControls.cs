@@ -161,6 +161,13 @@ namespace IOSPort
         int dragFinger = -1;
         Vector2 dragStart, dragOffset, hudDragStartOffset;
         bool dragMoved, countersShown, hintSet;
+        // Where each control was before each of its drags this session, for MOVE BACK.
+        readonly Dictionary<Item, List<Vector2>> moveHistory = new Dictionary<Item, List<Vector2>>();
+        Vector2 dragFrom;
+        // RESET needs a second tap within a few seconds.
+        Text resetLabel;
+        float resetArmedUntil = -1f;
+        const float ResetConfirmTime = 3f;
         // Action menu cells, lit when they match the selected control.
         readonly List<(Image image, Func<Control, bool> current)> pickerCells = new List<(Image, Func<Control, bool>)>();
         readonly List<GameObject> buttonOnlyCells = new List<GameObject>();
@@ -818,6 +825,8 @@ namespace IOSPort
             selected = null;
             selectedStick = false;
             dragFinger = -1;
+            moveHistory.Clear();
+            DisarmReset();
             // The rosary and shard counters only show when the amounts change; keep them up to place them.
             if (!countersShown)
             {
@@ -880,6 +889,11 @@ namespace IOSPort
             if (!chord && touches.Count == 0)
                 chordLatched = false;
 
+            if (resetArmedUntil >= 0f && Time.unscaledTime > resetArmedUntil)
+            {
+                DisarmReset();
+                UpdateRemapHint();
+            }
             HandlePanelTaps();
 
             if (dragFinger >= 0)
@@ -889,6 +903,12 @@ namespace IOSPort
                     // Finger lifted: a tap (no real movement) on a button opens the action picker.
                     if (!dragMoved && selected != null)
                         OpenRolePicker();
+                    if (dragMoved && selected != null)
+                    {
+                        if (!moveHistory.TryGetValue(selected.Item, out var history))
+                            moveHistory[selected.Item] = history = new List<Vector2>();
+                        history.Add(dragFrom);
+                    }
                     dragFinger = -1;
                     SaveLayout();
                     return;
@@ -928,6 +948,8 @@ namespace IOSPort
                 rolePicker.gameObject.SetActive(false);
                 selected = hit;
                 selectedStick = stickHit;
+                if (hit != null)
+                    dragFrom = new Vector2(hit.Item.x, hit.Item.y);
                 if (IsHud(hit))
                 {
                     dragFinger = id;
@@ -1019,6 +1041,62 @@ namespace IOSPort
             UpdateRemapHint();
         }
 
+        void TapReset()
+        {
+            if (Time.unscaledTime <= resetArmedUntil)
+            {
+                DisarmReset();
+                moveHistory.Clear();
+                ResetLayout();
+                remapHint.text = "Layout reset to the default.";
+                return;
+            }
+            resetArmedUntil = Time.unscaledTime + ResetConfirmTime;
+            resetLabel.text = "SURE?";
+            remapHint.text = "Tap RESET again to put every button and the HUD back to the default layout.";
+        }
+
+        void DisarmReset()
+        {
+            resetArmedUntil = -1f;
+            if (resetLabel != null)
+                resetLabel.text = "RESET";
+        }
+
+        // Back to where the control was before its last drag, and once those run out, to its default spot.
+        void MoveBack(Control c)
+        {
+            Vector2 to;
+            if (moveHistory.TryGetValue(c.Item, out var history) && history.Count > 0)
+            {
+                to = history[history.Count - 1];
+                history.RemoveAt(history.Count - 1);
+                remapHint.text = "Moved back." + (history.Count > 0 ? " Tap MOVE BACK again to go further back." : " Tap MOVE BACK again for its default spot.");
+            }
+            else
+            {
+                to = DefaultSpot(c);
+                remapHint.text = new Vector2(c.Item.x, c.Item.y) == to ? "Already at its default spot." : "Back at its default spot.";
+            }
+            hintSet = true;
+            if (IsHud(c))
+                SetHudOffset(c, to);
+            else
+            {
+                c.Item.x = to.x;
+                c.Item.y = to.y;
+                Place(c);
+            }
+        }
+
+        Vector2 DefaultSpot(Control c)
+        {
+            if (IsHud(c))
+                return Vector2.zero; // where the game puts it
+            var d = DefaultLayout().items.Find(i => i.id == c.Item.id);
+            return d != null ? new Vector2(d.x, d.y) : new Vector2(0.5f, 0.22f); // added buttons: where ADD puts them
+        }
+
         void KeepRemapUiOnTop()
         {
             remapPanel.SetAsLastSibling();
@@ -1057,7 +1135,7 @@ namespace IOSPort
                 ("FADE -", () => Fade(-0.1f)),
                 ("FADE +", () => Fade(0.1f)),
                 ("ADD", AddNewButton),
-                ("RESET", ResetLayout),
+                ("RESET", TapReset),
                 ("SETTINGS", OpenSettings),
                 ("DONE", StopRemap),
             };
@@ -1071,7 +1149,11 @@ namespace IOSPort
                 img.color = new Color(1f, 1f, 1f, 0.25f);
                 var text = NewText(b, actions[i].Item1, 24);
                 Anchor((RectTransform)text.transform, Vector2.zero, Vector2.one);
-                panelButtons.Add((b, actions[i].Item2));
+                if (actions[i].Item1 == "RESET")
+                    resetLabel = text;
+                var onTap = actions[i].Item2;
+                // Any other button cancels a RESET waiting for its second tap.
+                panelButtons.Add((b, onTap == TapReset ? onTap : () => { DisarmReset(); onTap(); }));
             }
             remapPanel.gameObject.SetActive(false);
         }
@@ -1304,11 +1386,19 @@ namespace IOSPort
             }
 
             y -= textRow;
-            for (int k = 0; k <= Shapes.Length; k++)
+            int bottomCells = Shapes.Length + 2;
+            for (int k = 0; k < bottomCells; k++)
             {
-                float x0 = k / (float)(Shapes.Length + 1), x1 = (k + 1) / (float)(Shapes.Length + 1);
+                float x0 = k / (float)bottomCells, x1 = (k + 1) / (float)bottomCells;
                 RectTransform cell;
                 if (k == Shapes.Length)
+                {
+                    // Stays open, to step back more than once.
+                    cell = Cell("move back", x0, x1, y, textRow, _ => false, () => MoveBack(selected));
+                    Anchor((RectTransform)NewText(cell, "MOVE BACK", 22).transform, new Vector2(0.03f, 0f), new Vector2(0.97f, 1f));
+                    continue;
+                }
+                if (k == Shapes.Length + 1)
                 {
                     cell = Cell("delete", x0, x1, y, textRow, _ => false, () =>
                     {
