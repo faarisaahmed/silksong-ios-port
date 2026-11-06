@@ -17,9 +17,10 @@ namespace IOSPort
     //    like the Hollow Knight iOS port (Touch Controls Kit), with its art: a small base ring and an "L" knob that
     //    follows the finger well past the ring and springs back smoothly; in game a touch anywhere in the lower-left
     //    zone grabs it (and the D-pad).
-    //  - Hold MENU + INV together to enter remap mode: drag to move, tap a button to change its action. The game's
-    //    HUD can be moved there too, in two blocks (the masks, and everything below them; see HudLayout).
-    //    The layout is saved in PlayerPrefs.
+    //  - Hold MENU + INV together to enter remap mode: drag to move, tap a button to change its action or shape or
+    //    delete it, ADD for a new one. The game's HUD shows there as boxes that work the same way (see HudLayout):
+    //    one for all of it at first, which the action menu can split into the masks, the spool and the rosary/shard
+    //    counters. The layout is saved in PlayerPrefs.
     // Art: button icons from the Silksong mobile HUD (Resources/IOSPortHud).
     [DefaultExecutionOrder(-1000)]
     public class TouchControls : MonoBehaviour
@@ -31,6 +32,9 @@ namespace IOSPort
             public string role; // action shown/pressed by this button
             public float x, y;  // centre, in safe-area fractions
             public float size;  // height, in safe-area heights (width follows the icon's aspect ratio)
+            public string shape; // "round", "square" or "wide"; empty: the action's own button art
+            // HUD items (role "hud"): the HudLayout blocks they move, as bits; x, y is their offset in screen heights.
+            public int hud;
         }
 
         [Serializable]
@@ -39,7 +43,7 @@ namespace IOSPort
             public int version = LayoutVersion;
             public float opacity = 0.6f;
             public List<Item> items = new List<Item>();
-            // HUD block offsets, in screen heights (HudLayout).
+            // v7's two HUD block offsets, in screen heights (HUD items since v8).
             public float hudMasksX, hudMasksY, hudSpoolX, hudSpoolY;
         }
 
@@ -47,7 +51,7 @@ namespace IOSPort
         {
             public string Id, Name;
             public Func<HeroActions, PlayerAction> Action;
-            public Sprite Sprite;
+            public Sprite Sprite, Glyph; // the button art, and its symbol alone (for the other shapes)
         }
 
         class Control
@@ -55,7 +59,7 @@ namespace IOSPort
             public Item Item;
             public Role Role;
             public RectTransform Rect;
-            public Image Image;
+            public Image Image, Glyph;
             public bool Pressed, Forwarded;
             public float PressedAt = -1f;
             // A tap that ends before ChordWindow still presses, for this long after the finger lifts.
@@ -63,7 +67,16 @@ namespace IOSPort
         }
 
         const string PrefsKey = "IOSPort.TouchLayout2";
-        const int LayoutVersion = 7;
+        const int LayoutVersion = 8;
+        const string HudRole = "hud";
+        const int AllHud = 7; // every HudLayout block
+
+        static readonly string[] Shapes = { "round", "square", "wide" };
+        const float WideAspect = 1.94f; // the game's wide buttons (MAP)
+        // Choices for a HUD item in the action menu, and the names its blocks go by.
+        static readonly (string name, int blocks)[] HudChoices =
+            { ("MASKS + SPOOL", AllHud), ("MASKS", 1), ("SPOOL", 2), ("ROSARIES + SHARDS", 4) };
+        static readonly string[] HudBlockNames = { "Masks", "Spool", "Rosaries + Shards" };
 
         // Joystick tuning, taken from the HK port's TCKJoystick (borderSize ~5, smoothFactor 7, 1.2 sensitivity).
         const float StickSensitivity = 1.2f;
@@ -100,6 +113,9 @@ namespace IOSPort
 
         readonly Dictionary<string, Role> roles = new Dictionary<string, Role>();
         readonly List<Control> buttons = new List<Control>();
+        // HUD items: in remap mode, outline boxes around the HUD blocks they move.
+        readonly List<Control> huds = new List<Control>();
+        readonly Dictionary<string, Sprite> frames = new Dictionary<string, Sprite>();
         readonly Dictionary<int, Vector2> touches = new Dictionary<int, Vector2>();
         readonly HashSet<int> newTouches = new HashSet<int>();
         readonly HashSet<int> knownTouches = new HashSet<int>();
@@ -140,15 +156,14 @@ namespace IOSPort
         bool remapping, chordLatched;
         RectTransform remapPanel, rolePicker;
         Text remapHint;
-        Control selected;
+        Control selected; // a button or a HUD item
         bool selectedStick;
         int dragFinger = -1;
-        Vector2 dragStart, dragOffset;
-        // HUD blocks in remap mode: their outline boxes, and the one being dragged (-1: none).
-        readonly RectTransform[] hudBoxes = new RectTransform[2];
-        int selectedHud = -1;
-        Vector2 hudDragStartOffset;
-        bool dragMoved;
+        Vector2 dragStart, dragOffset, hudDragStartOffset;
+        bool dragMoved, countersShown, hintSet;
+        // Action menu cells, lit when they match the selected control.
+        readonly List<(Image image, Func<Control, bool> current)> pickerCells = new List<(Image, Func<Control, bool>)>();
+        readonly List<GameObject> buttonOnlyCells = new List<GameObject>();
         readonly List<(RectTransform rect, Action onTap)> panelButtons = new List<(RectTransform, Action)>();
         readonly HashSet<int> panelFingers = new HashSet<int>();
 
@@ -185,6 +200,7 @@ namespace IOSPort
             Add("dash", 0.92f, 0.38f, 0.17f);
             Add("attack", 0.805f, 0.16f, 0.19f);
             Add("jump", 0.92f, 0.16f, 0.19f);
+            l.items.Add(new Item { id = "hud", role = HudRole, hud = AllHud });
             return l;
         }
 
@@ -195,7 +211,9 @@ namespace IOSPort
             titleFont = Resources.Load<Font>("IOSPortFonts/TrajanPro-Bold") ?? font;
             panelSprite = MakeRoundedRect(64, 18);
             foreach (var (id, name, action) in RoleDefs)
-                roles[id] = new Role { Id = id, Name = name, Action = action, Sprite = LoadSprite(id) };
+                roles[id] = new Role { Id = id, Name = name, Action = action, Sprite = LoadSprite(id), Glyph = LoadSprite("glyph_" + id) };
+            foreach (var shape in Shapes)
+                frames[shape] = MakeFrameSprite(shape);
             layout = LoadLayout();
             ApplyHudLayout();
 
@@ -225,7 +243,7 @@ namespace IOSPort
             BuildMovement();
             foreach (var item in layout.items)
                 if (item.id != "stick")
-                    AddButton(item);
+                    AddControl(item);
             BuildRemapPanel();
             BuildRolePicker();
             BuildGear();
@@ -309,23 +327,74 @@ namespace IOSPort
             image.color = new Color(1f, 1f, 1f, 0.75f);
         }
 
-        void AddButton(Item item)
+        static bool IsHud(Control c) => c != null && c.Item.role == HudRole;
+
+        Control AddControl(Item item)
         {
-            if (!roles.TryGetValue(item.role ?? "", out var role))
-                role = roles["jump"];
-            var c = new Control { Item = item, Role = role };
+            var c = new Control { Item = item };
             c.Rect = NewRect(item.id, hud);
             c.Image = c.Rect.gameObject.AddComponent<Image>();
-            c.Image.sprite = role.Sprite;
+            if (IsHud(c))
+            {
+                c.Image.sprite = panelSprite;
+                c.Image.type = Image.Type.Sliced;
+                c.Image.raycastTarget = false;
+                c.Rect.anchorMin = c.Rect.anchorMax = Vector2.zero;
+                // Not faded with the buttons, so it stays easy to find.
+                c.Rect.gameObject.AddComponent<CanvasGroup>().ignoreParentGroups = true;
+                c.Rect.gameObject.SetActive(false);
+                huds.Add(c);
+                return c;
+            }
+            if (!roles.TryGetValue(item.role ?? "", out c.Role))
+                c.Role = roles["jump"];
             c.Image.preserveAspect = true;
+            c.Glyph = NewRect("glyph", c.Rect).gameObject.AddComponent<Image>();
+            c.Glyph.preserveAspect = true;
+            Dress(c);
             buttons.Add(c);
+            return c;
+        }
+
+        void RemoveControl(Control c)
+        {
+            layout.items.Remove(c.Item);
+            buttons.Remove(c);
+            huds.Remove(c);
+            Destroy(c.Rect.gameObject);
+            if (selected == c)
+                selected = null;
+            ApplyHudLayout();
+        }
+
+        // Each action's own art has a shape; that one is drawn as is, the others as a frame around its symbol.
+        static string OwnShape(Role role)
+        {
+            if (role.Id == "menu" || role.Id == "inventory")
+                return "square";
+            var r = role.Sprite != null ? role.Sprite.rect : new Rect(0, 0, 1, 1);
+            return r.width / r.height > 1.4f ? "wide" : "round";
+        }
+
+        static string ShapeOf(Control c) => string.IsNullOrEmpty(c.Item.shape) ? OwnShape(c.Role) : c.Item.shape;
+
+        void Dress(Control c)
+        {
+            string shape = ShapeOf(c);
+            bool own = shape == OwnShape(c.Role) || c.Role.Glyph == null;
+            c.Image.sprite = own ? c.Role.Sprite : frames[shape];
+            c.Glyph.sprite = c.Role.Glyph;
+            c.Glyph.gameObject.SetActive(!own);
+            // The symbol fills the middle of the frame.
+            float inset = shape == "wide" ? 0.2f : 0.22f;
+            Anchor(c.Glyph.rectTransform, new Vector2(inset * (shape == "wide" ? 0.6f : 1f), inset), new Vector2(1f - inset * (shape == "wide" ? 0.6f : 1f), 1f - inset));
         }
 
         void SetRole(Control c, Role role)
         {
             c.Role = role;
             c.Item.role = role.Id;
-            c.Image.sprite = role.Sprite;
+            Dress(c);
             Place(c);
         }
 
@@ -361,7 +430,8 @@ namespace IOSPort
             bool showTitle = onTitle && wanted;   // movement control only
             bool full = remapping || showGame;
 
-            group.alpha = remapping ? 1f : full || showTitle ? layout.opacity : 0f;
+            // Remap mode shows the opacity too, so FADE - / + can be seen working (its panels ignore it).
+            group.alpha = full || showTitle ? layout.opacity : 0f;
             foreach (var c in buttons)
                 c.Rect.gameObject.SetActive(full);
             // The settings gear is always there on the title screens and in the pause menu.
@@ -728,7 +798,7 @@ namespace IOSPort
         void Style(Control c)
         {
             bool lit = c.Pressed && (c.Forwarded || remapping);
-            c.Image.color = remapping && c == selected ? new Color(1f, 0.82f, 0.4f, 1f) : new Color(1f, 1f, 1f, lit ? 1f : 0.8f);
+            c.Image.color = c.Glyph.color = remapping && c == selected ? new Color(1f, 0.82f, 0.4f, 1f) : new Color(1f, 1f, 1f, lit ? 1f : 0.8f);
             c.Rect.localScale = Vector3.one * (c.Pressed && !remapping ? 0.92f : 1f);
         }
 
@@ -747,8 +817,14 @@ namespace IOSPort
             remapping = true;
             selected = null;
             selectedStick = false;
-            selectedHud = -1;
             dragFinger = -1;
+            // The rosary and shard counters only show when the amounts change; keep them up to place them.
+            if (!countersShown)
+            {
+                CurrencyCounter.Show(CurrencyType.Money);
+                CurrencyCounter.Show(CurrencyType.Shard);
+                countersShown = true;
+            }
             pad?.ReleaseAll();
             stickFinger = -1;
             UpdateKnob(Vector2.zero, instant: true);
@@ -763,8 +839,14 @@ namespace IOSPort
             remapping = false;
             selected = null;
             selectedStick = false;
-            selectedHud = -1;
-            ShowHudBoxes(false);
+            foreach (var h in huds)
+                h.Rect.gameObject.SetActive(false);
+            if (countersShown)
+            {
+                CurrencyCounter.Hide(CurrencyType.Money);
+                CurrencyCounter.Hide(CurrencyType.Shard);
+                countersShown = false;
+            }
             rolePicker.gameObject.SetActive(false);
             SaveLayout();
             ResetButtons();
@@ -813,10 +895,9 @@ namespace IOSPort
                 }
                 if ((p - dragStart).magnitude > 12f * Mathf.Max(1f, Screen.dpi / 160f))
                     dragMoved = true;
-                if (dragMoved && selectedHud >= 0)
+                if (dragMoved && IsHud(selected))
                 {
-                    var o = hudDragStartOffset + (p - dragStart) / Screen.height;
-                    SetHudOffset(selectedHud, o);
+                    SetHudOffset(selected, hudDragStartOffset + (p - dragStart) / Screen.height);
                     return;
                 }
                 if (dragMoved)
@@ -842,17 +923,17 @@ namespace IOSPort
                     continue;
                 var hit = buttons.FindLast(c => Contains(c, point, 1f));
                 bool stickHit = hit == null && InMovementBox(point, 1f);
-                int hudHit = hit == null && !stickHit ? HudBoxAt(point) : -1;
+                if (hit == null && !stickHit)
+                    hit = HudBoxAt(point);
                 rolePicker.gameObject.SetActive(false);
                 selected = hit;
                 selectedStick = stickHit;
-                selectedHud = hudHit;
-                if (hudHit >= 0)
+                if (IsHud(hit))
                 {
                     dragFinger = id;
                     dragStart = point;
                     dragMoved = false;
-                    hudDragStartOffset = HudOffset(hudHit);
+                    hudDragStartOffset = new Vector2(hit.Item.x, hit.Item.y);
                 }
                 else if (hit != null || stickHit)
                 {
@@ -893,15 +974,67 @@ namespace IOSPort
 
         void UpdateRemapHint()
         {
-            if (selectedHud >= 0)
+            if (IsHud(selected))
             {
-                remapHint.text = (selectedHud == 0 ? "Masks" : "Spool, tools and counters") + " selected: drag to move them. RESET puts everything back.";
+                remapHint.text = "HUD (" + HudName(selected.Item.hud) + ") selected: drag to move it, tap it to split it up or delete it.";
                 return;
             }
             string what = selectedStick ? "Movement control" : selected != null ? selected.Role.Name : null;
             remapHint.text = what == null
-                ? "REMAP: drag a control or a HUD box to move it, tap a button to change its action. MENU + INV or DONE to finish."
-                : what + " selected: SIZE - / + to resize." + (selectedStick ? "" : " Tap a button to pick its action.");
+                ? "REMAP: drag a control or a HUD box to move it, tap one to change or delete it. MENU + INV or DONE to finish."
+                : what + " selected: SIZE - / + to resize." + (selectedStick ? "" : " Tap it for its action, shape or DELETE.");
+        }
+
+        static string HudName(int blocks)
+        {
+            var names = new List<string>();
+            for (int b = 0; b < HudLayout.BlockCount; b++)
+                if ((blocks & (1 << b)) != 0)
+                    names.Add(HudBlockNames[b]);
+            return string.Join(" + ", names);
+        }
+
+        void Fade(float delta)
+        {
+            layout.opacity = Mathf.Clamp(layout.opacity + delta, 0.15f, 1f);
+            SaveLayout();
+            remapHint.text = $"Buttons at {Mathf.RoundToInt(layout.opacity * 100f)}% opacity.";
+        }
+
+        // A new button in the middle of the screen (below the remap panel): a round Attack button, ready to be
+        // changed in the action menu.
+        void AddNewButton()
+        {
+            int n = 1;
+            while (layout.items.Exists(i => i.id == "button" + n))
+                n++;
+            var item = new Item { id = "button" + n, role = "attack", x = 0.5f, y = 0.22f, size = 0.15f };
+            layout.items.Add(item);
+            var c = AddControl(item);
+            Place(c);
+            KeepRemapUiOnTop();
+            selected = c;
+            selectedStick = false;
+            SaveLayout();
+            UpdateRemapHint();
+        }
+
+        void KeepRemapUiOnTop()
+        {
+            remapPanel.SetAsLastSibling();
+            rolePicker.SetAsLastSibling();
+        }
+
+        // MENU (with INV) is how remap mode is reached in game, so the last one stays.
+        bool IsLastMenu(Control c) => c != null && !IsHud(c) && c.Role.Id == "menu" && buttons.FindAll(b => b.Role.Id == "menu").Count == 1;
+
+        bool KeepMenu(Control c)
+        {
+            if (!IsLastMenu(c))
+                return false;
+            remapHint.text = "Keep one MENU button: with INV it opens this editor. ADD another one first to change this one.";
+            hintSet = true;
+            return true;
         }
 
         void BuildRemapPanel()
@@ -912,6 +1045,7 @@ namespace IOSPort
             bg.sprite = panelSprite;
             bg.type = Image.Type.Sliced;
             bg.color = new Color(0f, 0f, 0f, 0.7f);
+            remapPanel.gameObject.AddComponent<CanvasGroup>().ignoreParentGroups = true;
 
             remapHint = NewText(remapPanel, "", 30);
             Anchor((RectTransform)remapHint.transform, new Vector2(0.03f, 0.52f), new Vector2(0.97f, 0.95f));
@@ -920,8 +1054,9 @@ namespace IOSPort
             {
                 ("SIZE -", () => Resize(1f / 1.1f)),
                 ("SIZE +", () => Resize(1.1f)),
-                ("FADE -", () => { layout.opacity = Mathf.Clamp(layout.opacity - 0.1f, 0.15f, 1f); SaveLayout(); }),
-                ("FADE +", () => { layout.opacity = Mathf.Clamp(layout.opacity + 0.1f, 0.15f, 1f); SaveLayout(); }),
+                ("FADE -", () => Fade(-0.1f)),
+                ("FADE +", () => Fade(0.1f)),
+                ("ADD", AddNewButton),
                 ("RESET", ResetLayout),
                 ("SETTINGS", OpenSettings),
                 ("DONE", StopRemap),
@@ -934,120 +1069,273 @@ namespace IOSPort
                 img.sprite = panelSprite;
                 img.type = Image.Type.Sliced;
                 img.color = new Color(1f, 1f, 1f, 0.25f);
-                var text = NewText(b, actions[i].Item1, 28);
+                var text = NewText(b, actions[i].Item1, 24);
                 Anchor((RectTransform)text.transform, Vector2.zero, Vector2.one);
                 panelButtons.Add((b, actions[i].Item2));
             }
             remapPanel.gameObject.SetActive(false);
-
-            for (int i = 0; i < hudBoxes.Length; i++)
-            {
-                var box = NewRect(i == 0 ? "hud masks box" : "hud spool box", hud);
-                box.anchorMin = box.anchorMax = Vector2.zero;
-                var img = box.gameObject.AddComponent<Image>();
-                img.sprite = panelSprite;
-                img.type = Image.Type.Sliced;
-                img.raycastTarget = false;
-                box.gameObject.SetActive(false);
-                hudBoxes[i] = box;
-            }
         }
 
-        // ---- HUD blocks (HudLayout) ----
-
-        Vector2 HudOffset(int block) => block == 0
-            ? new Vector2(layout.hudMasksX, layout.hudMasksY)
-            : new Vector2(layout.hudSpoolX, layout.hudSpoolY);
-
-        void SetHudOffset(int block, Vector2 o)
-        {
-            // Keep the block's box on screen.
-            if (HudLayout.ScreenRect((HudLayout.Block)block, out var r))
-            {
-                var delta = (o - HudOffset(block)) * Screen.height;
-                float dx = Mathf.Clamp(delta.x, -r.xMin, Screen.width - r.xMax);
-                float dy = Mathf.Clamp(delta.y, -r.yMin, Screen.height - r.yMax);
-                o = HudOffset(block) + new Vector2(dx, dy) / Screen.height;
-            }
-            if (block == 0) { layout.hudMasksX = o.x; layout.hudMasksY = o.y; }
-            else { layout.hudSpoolX = o.x; layout.hudSpoolY = o.y; }
-            ApplyHudLayout();
-        }
+        // ---- HUD items (HudLayout) ----
 
         void ApplyHudLayout()
         {
-            HudLayout.MasksOffset = new Vector2(layout.hudMasksX, layout.hudMasksY);
-            HudLayout.SpoolOffset = new Vector2(layout.hudSpoolX, layout.hudSpoolY);
+            for (int b = 0; b < HudLayout.BlockCount; b++)
+            {
+                HudLayout.Shown[b] = false;
+                HudLayout.Offsets[b] = Vector2.zero;
+            }
+            foreach (var item in layout.items)
+                if (item.role == HudRole)
+                    for (int b = 0; b < HudLayout.BlockCount; b++)
+                        if ((item.hud & (1 << b)) != 0)
+                        {
+                            HudLayout.Shown[b] = true;
+                            HudLayout.Offsets[b] = new Vector2(item.x, item.y);
+                        }
         }
 
-        int HudBoxAt(Vector2 point)
+        // Where these blocks are without any offset (screen pixels); see HudLayout.BaseRect.
+        static bool HudBaseRect(int blocks, out Rect rect)
         {
-            for (int i = 0; i < hudBoxes.Length; i++)
-                if (hudBoxes[i].gameObject.activeSelf && HudLayout.ScreenRect((HudLayout.Block)i, out var r))
-                {
-                    float pad = 12f * Mathf.Max(1f, Screen.dpi / 160f);
-                    if (point.x >= r.xMin - pad && point.x <= r.xMax + pad && point.y >= r.yMin - pad && point.y <= r.yMax + pad)
-                        return i;
-                }
-            return -1;
+            rect = default;
+            bool any = false;
+            for (int b = 0; b < HudLayout.BlockCount; b++)
+            {
+                if ((blocks & (1 << b)) == 0 || !HudLayout.BaseRect((HudLayout.Block)b, out var r))
+                    continue;
+                rect = any ? Rect.MinMaxRect(Mathf.Min(rect.xMin, r.xMin), Mathf.Min(rect.yMin, r.yMin), Mathf.Max(rect.xMax, r.xMax), Mathf.Max(rect.yMax, r.yMax)) : r;
+                any = true;
+            }
+            return any;
+        }
+
+        static bool HudRect(Item item, out Rect rect)
+        {
+            if (!HudBaseRect(item.hud, out rect))
+                return false;
+            rect.position += new Vector2(item.x, item.y) * Screen.height;
+            return true;
+        }
+
+        void SetHudOffset(Control c, Vector2 o)
+        {
+            // Keep the box on screen.
+            if (HudBaseRect(c.Item.hud, out var r))
+            {
+                o.x = Mathf.Clamp(o.x, -r.xMin / Screen.height, (Screen.width - r.xMax) / Screen.height);
+                o.y = Mathf.Clamp(o.y, -r.yMin / Screen.height, (Screen.height - r.yMax) / Screen.height);
+            }
+            c.Item.x = o.x;
+            c.Item.y = o.y;
+            ApplyHudLayout();
+        }
+
+        // Gives these HUD blocks to `c`, taking them off any other HUD item (which goes when it has none left).
+        void TakeHud(Control c, int blocks)
+        {
+            c.Item.hud = blocks;
+            foreach (var other in huds.ToArray())
+            {
+                if (other == c)
+                    continue;
+                other.Item.hud &= ~blocks;
+                if (other.Item.hud == 0)
+                    RemoveControl(other);
+            }
+            ApplyHudLayout();
+        }
+
+        // Keeps these blocks in `c` and moves the rest of what it had to a new HUD item in the same place.
+        void SplitHud(Control c, int blocks)
+        {
+            int rest = c.Item.hud & ~blocks;
+            if (rest != 0)
+            {
+                int n = 2;
+                while (layout.items.Exists(i => i.id == "hud" + n))
+                    n++;
+                var item = new Item { id = "hud" + n, role = HudRole, hud = rest, x = c.Item.x, y = c.Item.y };
+                layout.items.Add(item);
+                AddControl(item);
+                KeepRemapUiOnTop();
+            }
+            TakeHud(c, blocks);
+        }
+
+        // Turns a button into a HUD item (or back), keeping it where it was on screen.
+        void ChangeKind(Control c, Role role, int blocks)
+        {
+            Vector2 at = IsHud(c)
+                ? (HudRect(c.Item, out var r) ? r.center : new Vector2(Screen.width, Screen.height) * 0.5f)
+                : c.Rect.anchoredPosition * canvas.scaleFactor;
+            var item = c.Item;
+            RemoveControl(c);
+            layout.items.Add(item);
+            item.shape = null;
+            if (role != null)
+            {
+                item.role = role.Id;
+                item.hud = 0;
+                item.size = 0.15f;
+                item.x = Mathf.Clamp01((at.x - safeArea.x) / safeArea.width);
+                item.y = Mathf.Clamp01((at.y - safeArea.y) / safeArea.height);
+            }
+            else
+            {
+                item.role = HudRole;
+                item.x = item.y = 0f;
+            }
+            selected = AddControl(item);
+            if (role != null)
+            {
+                Place(selected);
+                ApplyHudLayout();
+            }
+            else
+            {
+                TakeHud(selected, blocks);
+                if (HudBaseRect(blocks, out var home))
+                    SetHudOffset(selected, (at - home.center) / Screen.height);
+            }
+            KeepRemapUiOnTop();
+        }
+
+        Control HudBoxAt(Vector2 point)
+        {
+            float pad = 12f * Mathf.Max(1f, Screen.dpi / 160f);
+            for (int i = huds.Count - 1; i >= 0; i--)
+                if (huds[i].Rect.gameObject.activeSelf && HudRect(huds[i].Item, out var r)
+                    && point.x >= r.xMin - pad && point.x <= r.xMax + pad && point.y >= r.yMin - pad && point.y <= r.yMax + pad)
+                    return huds[i];
+            return null;
         }
 
         void PlaceHudBoxes()
         {
-            for (int i = 0; i < hudBoxes.Length; i++)
+            float pad = 8f * Mathf.Max(1f, Screen.dpi / 160f);
+            foreach (var h in huds)
             {
-                var box = hudBoxes[i];
-                if (!HudLayout.ScreenRect((HudLayout.Block)i, out var r))
-                {
-                    box.gameObject.SetActive(false);
+                bool showing = HudRect(h.Item, out var r);
+                h.Rect.gameObject.SetActive(showing);
+                if (!showing)
                     continue;
-                }
-                float pad = 8f * Mathf.Max(1f, Screen.dpi / 160f);
-                box.gameObject.SetActive(true);
-                box.sizeDelta = (r.size + Vector2.one * pad * 2f) / canvas.scaleFactor;
-                box.anchoredPosition = r.center / canvas.scaleFactor;
-                box.GetComponent<Image>().color = selectedHud == i ? new Color(1f, 0.82f, 0.4f, 0.35f) : new Color(1f, 1f, 1f, 0.18f);
+                h.Rect.sizeDelta = (r.size + Vector2.one * pad * 2f) / canvas.scaleFactor;
+                h.Rect.anchoredPosition = r.center / canvas.scaleFactor;
+                h.Image.color = selected == h ? new Color(1f, 0.82f, 0.4f, 0.35f) : new Color(1f, 1f, 1f, 0.18f);
             }
         }
 
-        void ShowHudBoxes(bool show)
-        {
-            foreach (var box in hudBoxes)
-                if (box != null)
-                    box.gameObject.SetActive(show);
-        }
-
+        // The action menu: the actions, the HUD parts (a button can become one and back), shapes and DELETE.
         void BuildRolePicker()
         {
             rolePicker = NewRect("action picker", hud);
-            Anchor(rolePicker, new Vector2(0.15f, 0.62f), new Vector2(0.77f, 0.98f));
+            Anchor(rolePicker, new Vector2(0.15f, 0.61f), new Vector2(0.77f, 0.99f));
             var bg = rolePicker.gameObject.AddComponent<Image>();
             bg.sprite = panelSprite;
             bg.type = Image.Type.Sliced;
             bg.color = new Color(0f, 0f, 0f, 0.8f);
+            rolePicker.gameObject.AddComponent<CanvasGroup>().ignoreParentGroups = true;
+
+            // Two rows of action icons, then a row of HUD parts and one of shapes, as fractions of the height.
+            const float iconRow = 0.31f, textRow = 0.19f;
+            RectTransform Cell(string name, float x0, float x1, float y1, float h, Func<Control, bool> current, Action onTap)
+            {
+                var cell = NewRect(name, rolePicker);
+                Anchor(cell, new Vector2(x0 + 0.005f, y1 - h + 0.012f), new Vector2(x1 - 0.005f, y1 - 0.012f));
+                var img = cell.gameObject.AddComponent<Image>();
+                img.sprite = panelSprite;
+                img.type = Image.Type.Sliced;
+                pickerCells.Add((img, current));
+                panelButtons.Add((cell, () =>
+                {
+                    hintSet = false;
+                    if (selected != null)
+                        onTap();
+                    RefreshPicker();
+                    SaveLayout();
+                    if (!hintSet)
+                        UpdateRemapHint();
+                }));
+                return cell;
+            }
+            void Close() => rolePicker.gameObject.SetActive(false);
+
             int cols = 6, i = 0;
-            int rows = (RoleDefs.Length + cols - 1) / cols;
             foreach (var (id, name, _) in RoleDefs)
             {
                 var role = roles[id];
-                float x0 = (i % cols) / (float)cols, y1 = 1f - (i / cols) / (float)rows;
-                var cell = NewRect(id, rolePicker);
-                Anchor(cell, new Vector2(x0 + 0.01f, y1 - 1f / rows + 0.02f), new Vector2(x0 + 1f / cols - 0.01f, y1 - 0.02f));
+                float x0 = (i % cols) / (float)cols;
+                var cell = Cell(id, x0, x0 + 1f / cols, 1f - (i / cols) * iconRow, iconRow, c => !IsHud(c) && c.Role == role, () =>
+                {
+                    if (role.Id != "menu" && KeepMenu(selected))
+                        return;
+                    if (IsHud(selected))
+                        ChangeKind(selected, role, 0);
+                    else
+                        SetRole(selected, role);
+                    Close();
+                });
                 var icon = NewRect("icon", cell).gameObject.AddComponent<Image>();
                 icon.sprite = role.Sprite;
                 icon.preserveAspect = true;
-                Anchor((RectTransform)icon.transform, new Vector2(0.1f, 0.3f), new Vector2(0.9f, 0.98f));
+                Anchor((RectTransform)icon.transform, new Vector2(0.1f, 0.3f), new Vector2(0.9f, 0.96f));
                 var label = NewText(cell, name, 22);
                 Anchor((RectTransform)label.transform, new Vector2(0f, 0f), new Vector2(1f, 0.3f));
-                panelButtons.Add((cell, () =>
-                {
-                    if (selected != null)
-                        SetRole(selected, role);
-                    rolePicker.gameObject.SetActive(false);
-                    SaveLayout();
-                    UpdateRemapHint();
-                }));
                 i++;
+            }
+
+            float y = 1f - 2f * iconRow;
+            for (int k = 0; k < HudChoices.Length; k++)
+            {
+                var (name, blocks) = HudChoices[k];
+                float x0 = k / (float)HudChoices.Length;
+                var cell = Cell(name, x0, x0 + 1f / HudChoices.Length, y, textRow, c => IsHud(c) && c.Item.hud == blocks, () =>
+                {
+                    if (KeepMenu(selected))
+                        return;
+                    if (IsHud(selected))
+                        SplitHud(selected, blocks);
+                    else
+                        ChangeKind(selected, null, blocks);
+                    Close();
+                });
+                Anchor((RectTransform)NewText(cell, "HUD: " + name, 22).transform, new Vector2(0.03f, 0f), new Vector2(0.97f, 1f));
+            }
+
+            y -= textRow;
+            for (int k = 0; k <= Shapes.Length; k++)
+            {
+                float x0 = k / (float)(Shapes.Length + 1), x1 = (k + 1) / (float)(Shapes.Length + 1);
+                RectTransform cell;
+                if (k == Shapes.Length)
+                {
+                    cell = Cell("delete", x0, x1, y, textRow, _ => false, () =>
+                    {
+                        if (KeepMenu(selected))
+                            return;
+                        RemoveControl(selected);
+                        Close();
+                    });
+                    Anchor((RectTransform)NewText(cell, "DELETE", 24).transform, Vector2.zero, Vector2.one);
+                    continue;
+                }
+                string shape = Shapes[k];
+                // Shapes stay open, to compare them.
+                cell = Cell(shape, x0, x1, y, textRow, c => !IsHud(c) && ShapeOf(c) == shape, () =>
+                {
+                    if (IsHud(selected))
+                        return;
+                    selected.Item.shape = shape;
+                    Dress(selected);
+                    Place(selected);
+                });
+                var icon = NewRect("icon", cell).gameObject.AddComponent<Image>();
+                icon.sprite = frames[shape];
+                icon.preserveAspect = true;
+                Anchor((RectTransform)icon.transform, new Vector2(0.05f, 0.12f), new Vector2(0.4f, 0.88f));
+                Anchor((RectTransform)NewText(cell, shape.ToUpperInvariant(), 22).transform, new Vector2(0.4f, 0f), new Vector2(0.97f, 1f));
+                buttonOnlyCells.Add(cell.gameObject);
             }
             rolePicker.gameObject.SetActive(false);
         }
@@ -1057,6 +1345,15 @@ namespace IOSPort
             if (selected == null)
                 return;
             rolePicker.gameObject.SetActive(true);
+            RefreshPicker();
+        }
+
+        void RefreshPicker()
+        {
+            foreach (var cell in buttonOnlyCells)
+                cell.SetActive(selected != null && !IsHud(selected));
+            foreach (var (image, current) in pickerCells)
+                image.color = selected != null && current(selected) ? new Color(1f, 0.82f, 0.4f, 0.4f) : new Color(1f, 1f, 1f, 0.08f);
         }
 
         // Full-screen panel: touch controls mode, movement style, performance, layout editing.
@@ -1126,7 +1423,7 @@ namespace IOSPort
 
         void Resize(float factor)
         {
-            var item = selectedStick ? stickItem : selected?.Item;
+            var item = selectedStick ? stickItem : IsHud(selected) ? null : selected?.Item;
             if (item == null)
                 return;
             item.size = Mathf.Clamp(item.size * factor, 0.06f, 0.6f);
@@ -1139,18 +1436,17 @@ namespace IOSPort
             var defaults = DefaultLayout();
             foreach (var c in buttons)
                 Destroy(c.Rect.gameObject);
+            foreach (var c in huds)
+                Destroy(c.Rect.gameObject);
             buttons.Clear();
+            huds.Clear();
             layout.items = defaults.items;
-            layout.hudMasksX = layout.hudMasksY = layout.hudSpoolX = layout.hudSpoolY = 0f;
             ApplyHudLayout();
-            selectedHud = -1;
             stickItem = layout.items.Find(i => i.id == "stick");
             foreach (var item in layout.items)
                 if (item.id != "stick")
-                    AddButton(item);
-            // Keep the remap UI on top of the new buttons.
-            remapPanel.SetAsLastSibling();
-            rolePicker.SetAsLastSibling();
+                    AddControl(item);
+            KeepRemapUiOnTop();
             selected = null;
             selectedStick = false;
             Relayout();
@@ -1213,7 +1509,7 @@ namespace IOSPort
         void Place(Control c)
         {
             float h = c.Item.size * safeArea.height / canvas.scaleFactor;
-            var sprite = c.Role.Sprite;
+            var sprite = c.Image.sprite;
             float aspect = sprite != null ? sprite.rect.width / sprite.rect.height : 1f;
             c.Rect.anchorMin = c.Rect.anchorMax = Vector2.zero;
             c.Rect.sizeDelta = new Vector2(h * aspect, h);
@@ -1224,7 +1520,7 @@ namespace IOSPort
         {
             var half = c.Rect.sizeDelta * canvas.scaleFactor * 0.5f * slack;
             var d = screenPoint - c.Rect.anchoredPosition * canvas.scaleFactor;
-            if (Mathf.Abs(half.x - half.y) > 1f)
+            if (ShapeOf(c) != "round")
                 return Mathf.Abs(d.x) <= half.x && Mathf.Abs(d.y) <= half.y;
             return d.sqrMagnitude <= half.x * half.x;
         }
@@ -1279,6 +1575,20 @@ namespace IOSPort
                         {
                             stick.x = 0.105f;
                             stick.y = 0.2f;
+                        }
+                        saved.version = 7;
+                    }
+                    if (saved != null && saved.version == 7 && saved.items.Count > 0)
+                    {
+                        // v8 made the HUD blocks layout items: v7's two offsets become one item, or two if apart.
+                        var masks = new Vector2(saved.hudMasksX, saved.hudMasksY);
+                        var spool = new Vector2(saved.hudSpoolX, saved.hudSpoolY);
+                        if (masks == spool)
+                            saved.items.Add(new Item { id = "hud", role = HudRole, hud = AllHud, x = masks.x, y = masks.y });
+                        else
+                        {
+                            saved.items.Add(new Item { id = "hud", role = HudRole, hud = 1, x = masks.x, y = masks.y });
+                            saved.items.Add(new Item { id = "hud2", role = HudRole, hud = AllHud & ~1, x = spool.x, y = spool.y });
                         }
                         saved.version = LayoutVersion;
                     }
@@ -1348,15 +1658,26 @@ namespace IOSPort
         static bool InTriangle(Vector2 q, float baseX, float tip, float halfHeight) =>
             q.x >= baseX && q.x <= tip && Mathf.Abs(q.y) <= halfHeight * (tip - q.x) / (tip - baseX);
 
-        static Sprite FromPixels(int size, Func<Vector2, float> alpha)
+        static Sprite FromPixels(int size, Func<Vector2, float> alpha) => FromPixels(size, size, alpha);
+
+        static Sprite FromPixels(int width, int height, Func<Vector2, float> alpha)
         {
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
-            float half = size * 0.5f;
-            for (int y = 0; y < size; y++)
-            for (int x = 0; x < size; x++)
-                tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha(new Vector2(x + 0.5f - half, y + 0.5f - half))));
+            var tex = new Texture2D(width, height, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+            for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+                tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha(new Vector2(x + 0.5f - width * 0.5f, y + 0.5f - height * 0.5f))));
             tex.Apply();
-            return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
+            return Sprite.Create(tex, new Rect(0, 0, width, height), new Vector2(0.5f, 0.5f), 100f);
+        }
+
+        // Button frames for the shapes, outlines like the game's mobile buttons.
+        static Sprite MakeFrameSprite(string shape)
+        {
+            int h = 256, w = shape == "wide" ? Mathf.RoundToInt(h * WideAspect) : h;
+            float stroke = h * 0.022f;
+            var half = new Vector2(w, h) * 0.5f - Vector2.one * (stroke + 1f);
+            float radius = shape == "round" ? half.y : shape == "wide" ? h * 0.15f : h * 0.17f;
+            return FromPixels(w, h, p => Mathf.Clamp01(stroke - Mathf.Abs(BoxDistance(p, half, radius)) + 0.5f));
         }
 
         // Plus-shaped D-pad outline with an arrowhead in each arm.
