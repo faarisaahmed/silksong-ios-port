@@ -116,6 +116,26 @@ namespace IOSPort
         // HUD items: in remap mode, outline boxes around the HUD blocks they move.
         readonly List<Control> huds = new List<Control>();
         readonly Dictionary<string, Sprite> frames = new Dictionary<string, Sprite>();
+        // Button outlines drawn at each button's size, so every button gets the same line width.
+        readonly Dictionary<(string, int), Sprite> sizedFrames = new Dictionary<(string, int), Sprite>();
+        // Where each action's symbol sits in its own art (fractions, from the bottom left), to draw it there
+        // inside a drawn outline.
+        static readonly Dictionary<string, Rect> GlyphSpots = new Dictionary<string, Rect>
+        {
+            ["attack"] = new Rect(0.1949f, 0.2712f, 0.5890f, 0.4280f),
+            ["bind"] = new Rect(0.1780f, 0.2415f, 0.6441f, 0.5042f),
+            ["dash"] = new Rect(0.2076f, 0.2288f, 0.5847f, 0.5381f),
+            ["harpoon"] = new Rect(0.1032f, 0.1944f, 0.8309f, 0.6111f),
+            ["inventory"] = new Rect(0.0761f, 0.0863f, 0.8528f, 0.7766f),
+            ["jump"] = new Rect(0.3093f, 0.1822f, 0.3771f, 0.6229f),
+            ["map"] = new Rect(0.2607f, 0.2556f, 0.4842f, 0.4889f),
+            ["menu"] = new Rect(0.2051f, 0.0872f, 0.5949f, 0.8359f),
+            ["needolin"] = new Rect(0.2542f, 0.1780f, 0.5169f, 0.6441f),
+            ["skill"] = new Rect(0.1834f, 0.1602f, 0.6304f, 0.6796f),
+            ["taunt"] = new Rect(0.1441f, 0.2669f, 0.7034f, 0.4661f),
+        };
+        // Outline width, in screen heights (the game's art at the default sizes).
+        const float LineWidth = 0.0029f;
         readonly Dictionary<int, Vector2> touches = new Dictionary<int, Vector2>();
         readonly HashSet<int> newTouches = new HashSet<int>();
         readonly HashSet<int> knownTouches = new HashSet<int>();
@@ -154,7 +174,7 @@ namespace IOSPort
 
         // Remap mode
         bool remapping, chordLatched;
-        RectTransform remapPanel, rolePicker;
+        RectTransform remapPanel, rolePicker, stickMenu;
         Text remapHint;
         Control selected; // a button or a HUD item
         bool selectedStick;
@@ -385,14 +405,20 @@ namespace IOSPort
 
         static string ShapeOf(Control c) => string.IsNullOrEmpty(c.Item.shape) ? OwnShape(c.Role) : c.Item.shape;
 
+        // The outline is drawn (see Place); the symbol goes where the action's own art has it, or in the middle
+        // of another shape.
         void Dress(Control c)
         {
             string shape = ShapeOf(c);
-            bool own = shape == OwnShape(c.Role) || c.Role.Glyph == null;
-            c.Image.sprite = own ? c.Role.Sprite : frames[shape];
+            bool drawn = c.Role.Glyph != null && (shape != OwnShape(c.Role) || GlyphSpots.ContainsKey(c.Role.Id));
+            c.Image.sprite = drawn ? frames[shape] : c.Role.Sprite;
             c.Glyph.sprite = c.Role.Glyph;
-            c.Glyph.gameObject.SetActive(!own);
-            // The symbol fills the middle of the frame.
+            c.Glyph.gameObject.SetActive(drawn);
+            if (shape == OwnShape(c.Role) && GlyphSpots.TryGetValue(c.Role.Id, out var spot))
+            {
+                Anchor(c.Glyph.rectTransform, spot.min, spot.max);
+                return;
+            }
             float inset = shape == "wide" ? 0.2f : 0.22f;
             Anchor(c.Glyph.rectTransform, new Vector2(inset * (shape == "wide" ? 0.6f : 1f), inset), new Vector2(1f - inset * (shape == "wide" ? 0.6f : 1f), 1f - inset));
         }
@@ -857,6 +883,7 @@ namespace IOSPort
                 countersShown = false;
             }
             rolePicker.gameObject.SetActive(false);
+            stickMenu.gameObject.SetActive(false);
             SaveLayout();
             ResetButtons();
             chordLatched = touches.Count > 0; // don't re-trigger while the chord fingers are still down
@@ -903,10 +930,13 @@ namespace IOSPort
                     // Finger lifted: a tap (no real movement) on a button opens the action picker.
                     if (!dragMoved && selected != null)
                         OpenRolePicker();
-                    if (dragMoved && selected != null)
+                    if (!dragMoved && selectedStick)
+                        stickMenu.gameObject.SetActive(true);
+                    var moved = selectedStick ? stickItem : selected?.Item;
+                    if (dragMoved && moved != null)
                     {
-                        if (!moveHistory.TryGetValue(selected.Item, out var history))
-                            moveHistory[selected.Item] = history = new List<Vector2>();
+                        if (!moveHistory.TryGetValue(moved, out var history))
+                            moveHistory[moved] = history = new List<Vector2>();
                         history.Add(dragFrom);
                     }
                     dragFinger = -1;
@@ -939,17 +969,20 @@ namespace IOSPort
                 if (panelFingers.Contains(id))
                     continue;
                 var point = touches[id];
-                if (rolePicker.gameObject.activeSelf && RectTransformUtility.RectangleContainsScreenPoint(rolePicker, point))
+                if (rolePicker.gameObject.activeSelf && RectTransformUtility.RectangleContainsScreenPoint(rolePicker, point)
+                    || stickMenu.gameObject.activeSelf && RectTransformUtility.RectangleContainsScreenPoint(stickMenu, point))
                     continue;
                 var hit = buttons.FindLast(c => Contains(c, point, 1f));
                 bool stickHit = hit == null && InMovementBox(point, 1f);
                 if (hit == null && !stickHit)
                     hit = HudBoxAt(point);
                 rolePicker.gameObject.SetActive(false);
+                stickMenu.gameObject.SetActive(false);
                 selected = hit;
                 selectedStick = stickHit;
-                if (hit != null)
-                    dragFrom = new Vector2(hit.Item.x, hit.Item.y);
+                var item = stickHit ? stickItem : hit?.Item;
+                if (item != null)
+                    dragFrom = new Vector2(item.x, item.y);
                 if (IsHud(hit))
                 {
                     dragFinger = id;
@@ -1004,7 +1037,7 @@ namespace IOSPort
             string what = selectedStick ? "Movement control" : selected != null ? selected.Role.Name : null;
             remapHint.text = what == null
                 ? "REMAP: drag a control or a HUD box to move it, tap one to change or delete it. MENU + INV or DONE to finish."
-                : what + " selected: SIZE - / + to resize." + (selectedStick ? "" : " Tap it for its action, shape or DELETE.");
+                : what + " selected: SIZE - / + to resize." + (selectedStick ? " Tap it to MOVE BACK." : " Tap it for its action, shape, MOVE BACK or DELETE.");
         }
 
         static string HudName(int blocks)
@@ -1063,11 +1096,13 @@ namespace IOSPort
                 resetLabel.text = "RESET";
         }
 
-        // Back to where the control was before its last drag, and once those run out, to its default spot.
+        // Back to where the control (c, or the movement control when null) was before its last drag, and once
+        // those run out, to its default spot.
         void MoveBack(Control c)
         {
+            var item = c != null ? c.Item : stickItem;
             Vector2 to;
-            if (moveHistory.TryGetValue(c.Item, out var history) && history.Count > 0)
+            if (moveHistory.TryGetValue(item, out var history) && history.Count > 0)
             {
                 to = history[history.Count - 1];
                 history.RemoveAt(history.Count - 1);
@@ -1075,11 +1110,17 @@ namespace IOSPort
             }
             else
             {
-                to = DefaultSpot(c);
-                remapHint.text = new Vector2(c.Item.x, c.Item.y) == to ? "Already at its default spot." : "Back at its default spot.";
+                to = DefaultSpot(item);
+                remapHint.text = new Vector2(item.x, item.y) == to ? "Already at its default spot." : "Back at its default spot.";
             }
             hintSet = true;
-            if (IsHud(c))
+            if (c == null)
+            {
+                item.x = to.x;
+                item.y = to.y;
+                PlaceStick();
+            }
+            else if (IsHud(c))
                 SetHudOffset(c, to);
             else
             {
@@ -1089,11 +1130,11 @@ namespace IOSPort
             }
         }
 
-        Vector2 DefaultSpot(Control c)
+        static Vector2 DefaultSpot(Item item)
         {
-            if (IsHud(c))
+            if (item.role == HudRole)
                 return Vector2.zero; // where the game puts it
-            var d = DefaultLayout().items.Find(i => i.id == c.Item.id);
+            var d = DefaultLayout().items.Find(i => i.id == item.id);
             return d != null ? new Vector2(d.x, d.y) : new Vector2(0.5f, 0.22f); // added buttons: where ADD puts them
         }
 
@@ -1101,6 +1142,7 @@ namespace IOSPort
         {
             remapPanel.SetAsLastSibling();
             rolePicker.SetAsLastSibling();
+            stickMenu.SetAsLastSibling();
         }
 
         // MENU (with INV) is how remap mode is reached in game, so the last one stays.
@@ -1428,6 +1470,28 @@ namespace IOSPort
                 buttonOnlyCells.Add(cell.gameObject);
             }
             rolePicker.gameObject.SetActive(false);
+
+            // The movement control only moves, so its menu is just MOVE BACK.
+            stickMenu = NewRect("movement menu", hud);
+            Anchor(stickMenu, new Vector2(0.36f, 0.61f), new Vector2(0.56f, 0.71f));
+            var stickBg = stickMenu.gameObject.AddComponent<Image>();
+            stickBg.sprite = panelSprite;
+            stickBg.type = Image.Type.Sliced;
+            stickBg.color = new Color(0f, 0f, 0f, 0.8f);
+            stickMenu.gameObject.AddComponent<CanvasGroup>().ignoreParentGroups = true;
+            var back = NewRect("move back", stickMenu);
+            Anchor(back, new Vector2(0.04f, 0.1f), new Vector2(0.96f, 0.9f));
+            var backImg = back.gameObject.AddComponent<Image>();
+            backImg.sprite = panelSprite;
+            backImg.type = Image.Type.Sliced;
+            backImg.color = new Color(1f, 1f, 1f, 0.08f);
+            Anchor((RectTransform)NewText(back, "MOVE BACK", 24).transform, Vector2.zero, Vector2.one);
+            panelButtons.Add((back, () =>
+            {
+                if (selectedStick)
+                    MoveBack(null);
+            }));
+            stickMenu.gameObject.SetActive(false);
         }
 
         void OpenRolePicker()
@@ -1604,6 +1668,16 @@ namespace IOSPort
             c.Rect.anchorMin = c.Rect.anchorMax = Vector2.zero;
             c.Rect.sizeDelta = new Vector2(h * aspect, h);
             c.Rect.anchoredPosition = ToCanvas(c.Item.x, c.Item.y);
+            if (c.Glyph.gameObject.activeSelf)
+                c.Image.sprite = SizedFrame(ShapeOf(c), h * canvas.scaleFactor);
+        }
+
+        Sprite SizedFrame(string shape, float pixels)
+        {
+            int h = Mathf.Max(16, Mathf.RoundToInt(pixels / 2f) * 2);
+            if (!sizedFrames.TryGetValue((shape, h), out var sprite))
+                sizedFrames[(shape, h)] = sprite = MakeFrameSprite(shape, h, Mathf.Max(1.5f, LineWidth * Screen.height));
+            return sprite;
         }
 
         bool Contains(Control c, Vector2 screenPoint, float slack)
@@ -1761,10 +1835,11 @@ namespace IOSPort
         }
 
         // Button frames for the shapes, outlines like the game's mobile buttons.
-        static Sprite MakeFrameSprite(string shape)
+        static Sprite MakeFrameSprite(string shape) => MakeFrameSprite(shape, 256, 256 * 0.022f);
+
+        static Sprite MakeFrameSprite(string shape, int h, float stroke)
         {
-            int h = 256, w = shape == "wide" ? Mathf.RoundToInt(h * WideAspect) : h;
-            float stroke = h * 0.022f;
+            int w = shape == "wide" ? Mathf.RoundToInt(h * WideAspect) : h;
             var half = new Vector2(w, h) * 0.5f - Vector2.one * (stroke + 1f);
             float radius = shape == "round" ? half.y : shape == "wide" ? h * 0.15f : h * 0.17f;
             return FromPixels(w, h, p => Mathf.Clamp01(stroke - Mathf.Abs(BoxDistance(p, half, radius)) + 0.5f));
