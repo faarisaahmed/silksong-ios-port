@@ -9,7 +9,7 @@ namespace IOSPort
     // the touch HUD in the Simulator. Lines: "<seconds after gameplay starts> down <finger> <x> <y>",
     // "<seconds> up <finger>" or "<seconds> shot <name>" (x/y are safe-area fractions, 0,0 = bottom left).
     // "sdown" takes whole-screen fractions instead; "press <InputControlType>" / "release" hold a virtual
-    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates, "animcheck" logs animators with stale bindings, "menustyle <n>" shows a title screen style, "lever <name>" pulls that lever, "dial" logs the dial doors (animators and colliders); "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "rinfo <name>" logs those renderers' materials and shaders; "hud" logs the HUD blocks (HudLayout), "rosaries <n>" picks some up; "fsmlog <object>" logs its FSMs state changes, "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
+    // controller button; "export" runs EXPORT SAVES and "import <files in Documents>" imports those files as IMPORT SAVES would; "pad <Input System layout>" plugs in a fake controller of that type (e.g. DualShock4GampadiOS) and "padpress"/"padrelease <control>" hold its buttons (e.g. select, leftShoulder); "noclip" and "warp" press the DebugTools buttons ("warp <scene> <gate>" goes elsewhere), "gates" logs the room's gates, "animcheck" logs animators with stale bindings, "menustyle <n>" shows a title screen style, "lever <name>" pulls that lever, "dial" logs the dial doors (animators and colliders); "cams" logs the cameras and blur planes, "disable <type>" turns that component off everywhere, "hide <name>" hides renderers by name, "front" logs what covers the middle of the screen; "rinfo <name>" logs those renderers' materials and shaders; "hud" logs the HUD blocks (HudLayout), "uistate" the menus' input state and selection, "deselect" clears the menu selection as a touch on nothing does, "rosaries <n>" picks some up; "fsmlog <object>" logs its FSMs state changes, "fsmstate <state> <object>" puts that object's PlayMaker FSM into a state (_ for spaces) "tp <x> <y>" moves Hornet and "pos <object>" logs where it is; "kill" deals Hornet lethal damage (to check the death effect); "god <InvincibilityStates>" sets the cheat invincibility, "silk" fills the silk spool and "hurt <damage> [object]" damages that enemy (or every active one). A first line of "title"
     // starts the clock on the title screen instead of in gameplay.
     public class TouchScript : MonoBehaviour
     {
@@ -194,6 +194,25 @@ namespace IOSPort
                     for (int b = 0; b < HudLayout.BlockCount; b++)
                         Debug.Log("[IOSPort] hud " + (HudLayout.Block)b + ": shown=" + HudLayout.Shown[b] + " offset=" + HudLayout.Offsets[b]
                             + " base=" + (HudLayout.BaseRect((HudLayout.Block)b, out var r) ? r.ToString() : "not showing"));
+                }
+                else if (p[1] == "deselect" && UnityEngine.EventSystems.EventSystem.current != null)
+                    UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null); // what a touch on nothing does to a menu
+                else if (p[1] == "uistate")
+                {
+                    var ih = ManagerSingleton<InputHandler>.UnsafeInstance;
+                    var es = UnityEngine.EventSystems.EventSystem.current;
+                    var gm = GameManager.UnsafeInstance;
+                    var ui = UIManager.instance;
+                    Debug.Log("[IOSPort] uistate game=" + (gm != null ? gm.GameState.ToString() : "-") + " paused=" + (gm != null && gm.isPaused)
+                        + " ui=" + (ui != null ? ui.uiState + "/" + ui.menuState : "-")
+                        + " accepting=" + (ih != null && ih.acceptingInput) + " pauseAllowed=" + (ih != null && ih.PauseAllowed)
+                        + " nav=" + (es != null && es.sendNavigationEvents)
+                        + " selected=" + (es != null && es.currentSelectedGameObject != null ? es.currentSelectedGameObject.name + (es.currentSelectedGameObject.activeInHierarchy ? "" : "(inactive)") : "none")
+                        + " module=" + (es != null && es.currentInputModule != null ? es.currentInputModule.GetType().Name : "none")
+                        + " move=" + (ih != null ? ih.inputActions.MoveVector.Vector.ToString() : "-")
+                        + " moduleMove=" + (ui != null && ui.inputModule.MoveAction != null ? ui.inputModule.MoveAction.Vector.ToString() : "null")
+                        + " device=" + InControl.InputManager.ActiveDevice.Name + " last=" + (ih != null ? ih.inputActions.LastInputType.ToString() : "-")
+                        + " fading=" + (ui != null && ui.IsFadingMenu));
                 }
                 else if (p[1] == "rosaries" && p.Length >= 3 && HeroController.instance != null)
                     HeroController.instance.AddGeo(int.Parse(p[2]));
